@@ -15,6 +15,15 @@ VSCode 用户数据、工作区数据或项目文件。
 
 ## 使用
 
+从 GitHub 克隆项目：
+
+```powershell
+git clone https://github.com/aikavvak12una/vscodexkit.git
+cd vscodexkit
+```
+
+直接运行：
+
 ```powershell
 npm run check
 npm run apply
@@ -22,7 +31,7 @@ npm run uninstall
 npm run test-notify
 ```
 
-也可以直接运行脚本：
+或者直接运行脚本：
 
 ```powershell
 node .\bin\vscodexkit.js check
@@ -31,12 +40,29 @@ node .\bin\vscodexkit.js uninstall
 node .\bin\vscodexkit.js test-notify
 ```
 
+也可以安装为本机全局命令：
+
+```powershell
+npm install -g .
+vscodexkit check
+vscodexkit apply
+vscodexkit uninstall
+```
+
 `apply` 默认开启通知和自动 Retry。可以用参数调整：
 
 ```powershell
 node .\bin\vscodexkit.js apply --no-notify
 node .\bin\vscodexkit.js apply --no-auto-retry
 node .\bin\vscodexkit.js apply --notify --auto-retry
+```
+
+如果已经安装为全局命令，也可以这样写：
+
+```powershell
+vscodexkit apply --no-notify
+vscodexkit apply --no-auto-retry
+vscodexkit apply --notify --auto-retry
 ```
 
 默认会自动查找最新的 Codex VSCode 扩展目录：
@@ -62,3 +88,11 @@ node .\bin\vscodexkit.js apply --extension-dir "C:\Users\<you>\.vscode\extension
 
 Codex VSCode 扩展更新后，需要重新运行 `apply`。脚本会自动选择最新扩展目录，
 并为新版本生成新的原版基线。脚本不会随 VSCode 启动自动运行。
+
+更新本工具：
+
+```powershell
+git pull
+npm install -g .
+vscodexkit apply
+```
