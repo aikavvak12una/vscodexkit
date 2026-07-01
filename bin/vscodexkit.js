@@ -6,7 +6,7 @@ const path = require("path");
 const childProcess = require("child_process");
 const crypto = require("crypto");
 
-const VERSION = "0.8.14";
+const VERSION = "0.8.15";
 const EXTENSION_DIR_PREFIX = "openai.chatgpt-";
 const EXTENSION_JS = path.join("out", "extension.js");
 const WEBVIEW_INDEX = path.join("webview", "index.html");
@@ -169,7 +169,7 @@ namespace CodexPatchToast {
   }
 }
 function Get-CodexAppId {
-  if ([string]::IsNullOrWhiteSpace($env:CODEXPATCH_AUMID)) { return 'CodexPatch.VSCode' }
+  if ([string]::IsNullOrWhiteSpace($env:CODEXPATCH_AUMID)) { return 'vscodexkit.VSCode' }
   return $env:CODEXPATCH_AUMID
 }
 function Ensure-CodexToastShortcut {
@@ -286,7 +286,7 @@ Write-CodexPatchLog ('end shown=' + $script:shown)
 
 const V6_NOTIFICATION_HANDLER = `e.push(d.registerInternalNotificationHandler(Re=>{/* codexpatch:v6:turn-completed-windows-toast-first */if(Re.method==="turn/completed"){E.emit("turnComplete");try{let cfg=globalThis.__codexpatchSettings||{};if(cfg.notify!==false){let st=Re.params?.turn?.status,err=Re.params?.turn?.error,msg=err?.message||err?.detail||err?.code||"",ok=st==="completed",title="Codex",body=ok?"Codex 任务已完成":"Codex 任务结束: "+(st??"unknown")+(msg?": "+String(msg).slice(0,180):"");if(process.platform==="win32")try{let ps=${JSON.stringify(WINDOWS_SYSTEM_NOTIFY_PS_V6)},cp=require("child_process"),p=cp.spawn("powershell.exe",["-NoProfile","-ExecutionPolicy","Bypass","-WindowStyle","Hidden","-Sta","-Command",ps],{windowsHide:true,detached:true,stdio:"ignore",env:{...process.env,CODEXPATCH_TITLE:title,CODEXPATCH_BODY:body,CODEXPATCH_ICON:ok?"Info":"Warning",CODEXPATCH_AUMID:"Microsoft.VisualStudioCode"}});p.unref?.()}catch(_){ok?ut.window.showInformationMessage(body):ut.window.showWarningMessage(body)}else ok?ut.window.showInformationMessage(body):ut.window.showWarningMessage(body)}}catch(_){}}}));`;
 
-const V7_NOTIFICATION_HANDLER = `e.push(d.registerInternalNotificationHandler(Re=>{/* codexpatch:v7:turn-completed-windows-toast-history */if(Re.method==="turn/completed"){E.emit("turnComplete");try{let cfg=globalThis.__codexpatchSettings||{};if(cfg.notify!==false){let st=Re.params?.turn?.status,err=Re.params?.turn?.error,msg=err?.message||err?.detail||err?.code||"",ok=st==="completed",title="Codex",body=ok?"Codex 任务已完成":"Codex 任务结束: "+(st??"unknown")+(msg?": "+String(msg).slice(0,180):"");if(process.platform==="win32")try{let ps=${JSON.stringify(WINDOWS_SYSTEM_NOTIFY_PS_V7)},cp=require("child_process"),p=cp.spawn("powershell.exe",["-NoProfile","-ExecutionPolicy","Bypass","-WindowStyle","Hidden","-Sta","-Command",ps],{windowsHide:true,detached:true,stdio:"ignore",env:{...process.env,CODEXPATCH_TITLE:title,CODEXPATCH_BODY:body,CODEXPATCH_ICON:ok?"Info":"Warning",CODEXPATCH_AUMID:"CodexPatch.VSCode",CODEXPATCH_SHORTCUT_TARGET:process.execPath,CODEXPATCH_SHORTCUT_ICON:process.execPath}});p.unref?.()}catch(_){ok?ut.window.showInformationMessage(body):ut.window.showWarningMessage(body)}else ok?ut.window.showInformationMessage(body):ut.window.showWarningMessage(body)}}catch(_){}}}));`;
+const V7_NOTIFICATION_HANDLER = `e.push(d.registerInternalNotificationHandler(Re=>{/* codexpatch:v7:turn-completed-windows-toast-history */if(Re.method==="turn/completed"){E.emit("turnComplete");try{let cfg=globalThis.__codexpatchSettings||{};if(cfg.notify!==false){let st=Re.params?.turn?.status,err=Re.params?.turn?.error,msg=err?.message||err?.detail||err?.code||"",ok=st==="completed",title="Codex",body=ok?"Codex 任务已完成":"Codex 任务结束: "+(st??"unknown")+(msg?": "+String(msg).slice(0,180):"");if(process.platform==="win32")try{let ps=${JSON.stringify(WINDOWS_SYSTEM_NOTIFY_PS_V7)},cp=require("child_process"),p=cp.spawn("powershell.exe",["-NoProfile","-ExecutionPolicy","Bypass","-WindowStyle","Hidden","-Sta","-Command",ps],{windowsHide:true,detached:true,stdio:"ignore",env:{...process.env,CODEXPATCH_TITLE:title,CODEXPATCH_BODY:body,CODEXPATCH_ICON:ok?"Info":"Warning",CODEXPATCH_AUMID:"vscodexkit.VSCode",CODEXPATCH_SHORTCUT_TARGET:process.execPath,CODEXPATCH_SHORTCUT_ICON:process.execPath}});p.unref?.()}catch(_){ok?ut.window.showInformationMessage(body):ut.window.showWarningMessage(body)}else ok?ut.window.showInformationMessage(body):ut.window.showWarningMessage(body)}}catch(_){}}}));`;
 
 const V9_NOTIFICATION_HANDLER = `e.push((()=>{/* codexpatch:v9:conversation-end-all-known-states */
 function cpText(e){return e==null?"":typeof e==="string"?e:typeof e==="number"?String(e):""}
@@ -297,7 +297,7 @@ function cpBody(e,r,n){if(e==="completed")return"Codex 任务已完成";let o=r=
 function cpFinal(e){return e==="completed"||e==="failed"||e==="interrupted"}
 function cpActive(){return globalThis.__codexpatchActiveConversations||(globalThis.__codexpatchActiveConversations=new Set)}
 function cpStart(e){try{let r=cpConv(typeof e==="string"?{conversationId:e}:e);cpActive().add(r);globalThis.__codexpatchNotifyLastByConversation?.delete(r)}catch(_){}}
-function cpNotify(e){try{let r=globalThis.__codexpatchSettings||{};if(r.notify===false)return;let n=e?.status||e?.params?.turn?.status||"unknown";if(!cpFinal(n))return;let o=Date.now(),i=globalThis.__codexpatchNotifyLastByConversation||(globalThis.__codexpatchNotifyLastByConversation=new Map),s=cpConv(e),a=i.get(s);if(a&&o-a.at<5e3)return;for(let[e,r]of i)try{o-r.at>6e4&&i.delete(e)}catch(_){}i.set(s,{at:o,status:n});let c=e?.method||"",l=cpMsg(e),u=n==="completed",d="Codex",f=cpBody(n,c,l);if(process.platform==="win32")try{let e=${JSON.stringify(WINDOWS_SYSTEM_NOTIFY_PS_V7)},r=require("child_process"),n=r.spawn("powershell.exe",["-NoProfile","-ExecutionPolicy","Bypass","-WindowStyle","Hidden","-Sta","-Command",e],{windowsHide:true,detached:true,stdio:"ignore",env:{...process.env,CODEXPATCH_TITLE:d,CODEXPATCH_BODY:f,CODEXPATCH_ICON:u?"Info":"Warning",CODEXPATCH_AUMID:"CodexPatch.VSCode",CODEXPATCH_SHORTCUT_TARGET:process.execPath,CODEXPATCH_SHORTCUT_ICON:process.execPath}});n.unref?.()}catch(_){u?ut.window.showInformationMessage(f):ut.window.showWarningMessage(f)}else u?ut.window.showInformationMessage(f):ut.window.showWarningMessage(f)}catch(_){}}
+function cpNotify(e){try{let r=globalThis.__codexpatchSettings||{};if(r.notify===false)return;let n=e?.status||e?.params?.turn?.status||"unknown";if(!cpFinal(n))return;let o=Date.now(),i=globalThis.__codexpatchNotifyLastByConversation||(globalThis.__codexpatchNotifyLastByConversation=new Map),s=cpConv(e),a=i.get(s);if(a&&o-a.at<5e3)return;for(let[e,r]of i)try{o-r.at>6e4&&i.delete(e)}catch(_){}i.set(s,{at:o,status:n});let c=e?.method||"",l=cpMsg(e),u=n==="completed",d="Codex",f=cpBody(n,c,l);if(process.platform==="win32")try{let e=${JSON.stringify(WINDOWS_SYSTEM_NOTIFY_PS_V7)},r=require("child_process"),n=r.spawn("powershell.exe",["-NoProfile","-ExecutionPolicy","Bypass","-WindowStyle","Hidden","-Sta","-Command",e],{windowsHide:true,detached:true,stdio:"ignore",env:{...process.env,CODEXPATCH_TITLE:d,CODEXPATCH_BODY:f,CODEXPATCH_ICON:u?"Info":"Warning",CODEXPATCH_AUMID:"vscodexkit.VSCode",CODEXPATCH_SHORTCUT_TARGET:process.execPath,CODEXPATCH_SHORTCUT_ICON:process.execPath}});n.unref?.()}catch(_){u?ut.window.showInformationMessage(f):ut.window.showWarningMessage(f)}else u?ut.window.showInformationMessage(f):ut.window.showWarningMessage(f)}catch(_){}}
 function cpHandle(e,r){try{let n=e?.status||e?.params?.turn?.status||"unknown";if(n==="inProgress"){cpStart(e);return}if(!cpFinal(n))return;let o=cpConv(e);if(r&&!cpActive().has(o))return;cpActive().delete(o);cpNotify(e)}catch(_){}}
 function cpPath(e){return Array.isArray(e)?e.map(cpText):typeof e==="string"?e.split(/[./]/):[]}
 function cpPathLooksTurn(e){let r=cpPath(e);return r.some(e=>e==="turn"||e==="turns"||e==="conversationTurns"||e==="visibleTurnEntries"||e==="turnHistory")}
@@ -336,7 +336,7 @@ function cpRetryBlob(e){let r=e?.params||{},n=[e?.source,e?.method,cpStatus(e),c
 function cpLooksStreamRetryExhausted(e){let r=cpRetryBlob(e),n=(cpText(e?.source)+" "+cpText(e?.method)).toLowerCase(),o=/stream_error|thread-stream-state/.test(n)||/\\bstream\\b|stream[_ -]?/.test(r),i=cpStatus(e)==="failed"&&/(currently experiencing high demand|temporary errors?|temporarily unavailable|service unavailable|overloaded|too many requests|rate limit|\\b429\\b|\\b502\\b|\\b503\\b|\\b504\\b|gateway timeout|network error|fetch failed|failed to fetch|connection (?:reset|refused|closed)|econnreset|etimedout|eai_again|enotfound|timed?\\s*out)/.test(r);if(/stream[_ -]?max[_ -]?retries/.test(r))return true;if(i)return true;if(!o)return false;return /max(?:imum)?\\s+retries|retry limit|retries exhausted|exhausted\\s+retries|too many retries|retry attempts? exhausted|all retries failed/.test(r)}
 function cpRequestAutoRetry(e){try{let r=globalThis.__codexpatchSettings||{};if(r.autoRetry!==true){cpLog("auto-retry-skip-disabled",{conversationId:cpConv(e),status:cpStatus(e),method:e?.method});return false}if(cpLooksUserInterrupted(e)){cpLog("auto-retry-skip-user-interrupt",{conversationId:cpConv(e),status:cpStatus(e),method:e?.method});return false}if(!cpLooksStreamRetryExhausted(e)){cpLog("auto-retry-skip-not-stream-max-retries",{conversationId:cpConv(e),status:cpStatus(e),method:e?.method,msg:cpMsg(e)});return false}let n=cpConv(e),o=cpTurnId(e),i=cpHost(e),s=cpModel(e),a=n+"|"+(o||cpRequestId(e)||cpMsg(e).slice(0,80))+"|"+cpStatus(e)+"|"+(e?.method||""),c=Date.now(),l=globalThis.__codexpatchAutoRetryLast||(globalThis.__codexpatchAutoRetryLast=new Map),u=l.get(a);if(u&&c-u<3e4){cpLog("auto-retry-skip-duplicate",{key:a});return true}for(let[e,r]of l)try{c-r>12e4&&l.delete(e)}catch(_){}let f={type:"codexpatch-auto-retry",hostId:i,conversationId:n,threadId:n,turnId:o,model:s||null,status:cpStatus(e),method:e?.method||"",reason:"stream_max_retries",windowMs:3e4,at:c},p=globalThis.__codexpatchBroadcastToWebview;if(typeof p==="function"){cpLog("auto-retry-arm",f);p(f);l.set(a,c);return true}else cpLog("auto-retry-no-broadcast",f);return false}catch(r){cpLog("auto-retry-exception",{message:r?.message});return false}}
 function cpBody(e,r,n,o){if(o==="approval"||cpApproval(e)||cpAwaitingUserMethod(r)){if(cpAwaitingInputMethod(r))return n||"Codex 需要你回复问题";return n||"Codex 需要你审批操作"}if(e==="completed")return"Codex 任务已完成";let i=r==="codex/event/stream_error"?"Codex 网络错误，任务已停止":r==="codex/event/error"?"Codex 任务发生错误":e==="interrupted"?"Codex 任务已中断":e==="failed"?"Codex 任务失败":"Codex 任务结束: "+(e??"unknown");return n?i+": "+String(n).slice(0,180):i}
-function cpNotify(e){try{let r=globalThis.__codexpatchSettings||{};if(r.notify===false){cpLog("notify-skip-disabled",e);return}let n=cpStatus(e),o=e?.kind||"",i=e?.method||"",s=cpApproval(n)||o==="approval"||cpAwaitingUserMethod(i);if(!s&&!cpFinal(n)){cpLog("notify-skip-not-final",{status:n,kind:o,method:i});return}if(!s&&cpLooksUserInterrupted(e)){cpLog("notify-skip-user-interrupt",{status:n,method:i,msg:cpMsg(e)});return}let a=Date.now(),c=globalThis.__codexpatchNotifyLastByConversation||(globalThis.__codexpatchNotifyLastByConversation=new Map),l=cpConv(e),u=s?"approval":n,d=l+"|"+u+"|"+i+"|"+cpRequestId(e),f=c.get(d);if(f&&a-f<1e4){cpLog("notify-skip-duplicate",{key:d,status:n,kind:o});return}for(let[e,r]of c)try{a-r>12e4&&c.delete(e)}catch(_){}c.set(d,a);let p=cpMsg(e),h=s?"Codex 需要处理":"Codex",g=cpBody(n,i,p,o),m=s||n!=="completed";cpLog("notify-send",{conversationId:l,status:n,kind:o,method:i,body:g});if(process.platform==="win32")try{let e=${JSON.stringify(WINDOWS_SYSTEM_NOTIFY_PS_V8)},r=cpMod(),o=r.path.join(r.os.tmpdir(),"codexpatch-notify.ps1");try{r.fs.writeFileSync(o,e,"utf8");cpLog("notify-script-written",{path:o,bytes:e.length})}catch(e){cpLog("notify-script-write-failed",{message:e?.message})}let n=r.cp.spawn("powershell.exe",["-NoProfile","-ExecutionPolicy","Bypass","-Sta","-File",o],{windowsHide:true,detached:false,stdio:["ignore","ignore","pipe"],env:{...process.env,CODEXPATCH_TITLE:h,CODEXPATCH_BODY:g,CODEXPATCH_ICON:m?"Warning":"Info",CODEXPATCH_EVENT:u,CODEXPATCH_AUMID:"CodexPatch.VSCode",CODEXPATCH_LOG_FILE:process.env.CODEXPATCH_LOG_FILE||r.path.join(r.os.tmpdir(),"codexpatch.log"),CODEXPATCH_SHORTCUT_TARGET:process.execPath,CODEXPATCH_SHORTCUT_ICON:process.execPath}});cpLog("notify-spawned",{pid:n.pid,event:u,file:o});n.stderr?.on?.("data",e=>cpLog("notify-stderr",{message:String(e).slice(0,500)}));n.on?.("exit",(e,r)=>cpLog("notify-exit",{code:e,signal:r,event:u}));n.on?.("error",e=>cpLog("notify-spawn-error",{message:e?.message}));return}catch(e){cpLog("notify-spawn-exception",{message:e?.message})}m?ut.window.showWarningMessage(g):ut.window.showInformationMessage(g)}catch(e){cpLog("notify-exception",{message:e?.message})}}
+function cpNotify(e){try{let r=globalThis.__codexpatchSettings||{};if(r.notify===false){cpLog("notify-skip-disabled",e);return}let n=cpStatus(e),o=e?.kind||"",i=e?.method||"",s=cpApproval(n)||o==="approval"||cpAwaitingUserMethod(i);if(!s&&!cpFinal(n)){cpLog("notify-skip-not-final",{status:n,kind:o,method:i});return}if(!s&&cpLooksUserInterrupted(e)){cpLog("notify-skip-user-interrupt",{status:n,method:i,msg:cpMsg(e)});return}let a=Date.now(),c=globalThis.__codexpatchNotifyLastByConversation||(globalThis.__codexpatchNotifyLastByConversation=new Map),l=cpConv(e),u=s?"approval":n,d=l+"|"+u+"|"+i+"|"+cpRequestId(e),f=c.get(d);if(f&&a-f<1e4){cpLog("notify-skip-duplicate",{key:d,status:n,kind:o});return}for(let[e,r]of c)try{a-r>12e4&&c.delete(e)}catch(_){}c.set(d,a);let p=cpMsg(e),h=s?"Codex 需要处理":"Codex",g=cpBody(n,i,p,o),m=s||n!=="completed";cpLog("notify-send",{conversationId:l,status:n,kind:o,method:i,body:g});if(process.platform==="win32")try{let e=${JSON.stringify(WINDOWS_SYSTEM_NOTIFY_PS_V8)},r=cpMod(),o=r.path.join(r.os.tmpdir(),"codexpatch-notify.ps1");try{r.fs.writeFileSync(o,e,"utf8");cpLog("notify-script-written",{path:o,bytes:e.length})}catch(e){cpLog("notify-script-write-failed",{message:e?.message})}let n=r.cp.spawn("powershell.exe",["-NoProfile","-ExecutionPolicy","Bypass","-Sta","-File",o],{windowsHide:true,detached:false,stdio:["ignore","ignore","pipe"],env:{...process.env,CODEXPATCH_TITLE:h,CODEXPATCH_BODY:g,CODEXPATCH_ICON:m?"Warning":"Info",CODEXPATCH_EVENT:u,CODEXPATCH_AUMID:"vscodexkit.VSCode",CODEXPATCH_LOG_FILE:process.env.CODEXPATCH_LOG_FILE||r.path.join(r.os.tmpdir(),"codexpatch.log"),CODEXPATCH_SHORTCUT_TARGET:process.execPath,CODEXPATCH_SHORTCUT_ICON:process.execPath}});cpLog("notify-spawned",{pid:n.pid,event:u,file:o});n.stderr?.on?.("data",e=>cpLog("notify-stderr",{message:String(e).slice(0,500)}));n.on?.("exit",(e,r)=>cpLog("notify-exit",{code:e,signal:r,event:u}));n.on?.("error",e=>cpLog("notify-spawn-error",{message:e?.message}));return}catch(e){cpLog("notify-spawn-exception",{message:e?.message})}m?ut.window.showWarningMessage(g):ut.window.showInformationMessage(g)}catch(e){cpLog("notify-exception",{message:e?.message})}}
 function cpStart(e){try{let r=cpConv(typeof e==="string"?{conversationId:e}:e);(globalThis.__codexpatchActiveConversations||(globalThis.__codexpatchActiveConversations=new Set)).add(r);cpLog("conversation-start",{conversationId:r,source:e?.source,method:e?.method})}catch(_){}}
 function cpHandle(e){try{let r=cpStatus(e),n=e?.method||"";cpLog("observe",{source:e?.source,method:n,status:r,conversationId:cpConv(e),kind:e?.kind});if(r==="inProgress"){cpStart(e);return}if(cpFinal(r)&&!cpAuthoritativeEnd(e)){cpLog("notify-skip-nonauthoritative-final",{source:e?.source,method:n,status:r,conversationId:cpConv(e)});return}let o=false;if(r==="failed"||n==="codex/event/stream_error"||n==="codex/event/error")o=cpRequestAutoRetry(e);if(o){cpLog("notify-skip-auto-retry",{conversationId:cpConv(e),status:r,method:n,msg:cpMsg(e)});return}if(cpFinal(r)||cpApproval(r)||e?.kind==="approval"||cpAwaitingUserMethod(n))cpNotify(e)}catch(n){cpLog("handle-exception",{message:n?.message})}}
 function cpPath(e){return Array.isArray(e)?e.map(cpText):typeof e==="string"?e.split(/[./]/):[]}
@@ -541,7 +541,7 @@ const WEBVIEW_UI_SOURCE = `/* codexpatch:v7:webview-ui */
       section.id = "codexpatch-dropdown-section";
       section.innerHTML = [
         '<div class="codexpatch-separator" aria-hidden="true"></div>',
-        '<div class="codexpatch-title">Codex Patch</div>',
+        '<div class="codexpatch-title">vscodexkit</div>',
         '<button class="codexpatch-item" type="button" role="menuitemcheckbox" tabindex="-1" data-codexpatch-action="notify">',
         '<span class="codexpatch-item-content"><span class="codexpatch-label">自动通知</span><span class="codexpatch-state"></span></span>',
         '</button>',
@@ -1116,7 +1116,7 @@ function runNotificationTest() {
         CODEXPATCH_TITLE: "vscodexkit 测试",
         CODEXPATCH_BODY: "如果看到这条，系统通知通道可用。",
         CODEXPATCH_ICON: "Info",
-        CODEXPATCH_AUMID: "CodexPatch.VSCode",
+        CODEXPATCH_AUMID: "vscodexkit.VSCode",
         CODEXPATCH_SHORTCUT_TARGET: shortcutTarget,
         CODEXPATCH_SHORTCUT_ICON: shortcutTarget
       }
@@ -1141,7 +1141,7 @@ function showScriptNotification(title, body, icon = "Info") {
           CODEXPATCH_TITLE: title,
           CODEXPATCH_BODY: body,
           CODEXPATCH_ICON: icon,
-          CODEXPATCH_AUMID: "CodexPatch.VSCode",
+          CODEXPATCH_AUMID: "vscodexkit.VSCode",
           CODEXPATCH_SHORTCUT_TARGET: shortcutTarget,
           CODEXPATCH_SHORTCUT_ICON: shortcutTarget
         }
@@ -1775,7 +1775,10 @@ function restorePatch(extensionDir, manifest, files, options = {}) {
   const baseline = loadBaseline(manifest, files);
   if (baseline) {
     const restored = restoreFilesFromBaseline(baseline, files);
-    if (options.uninstall) removeBaseline(extensionDir, files);
+    if (options.uninstall) {
+      removeNotificationShortcuts();
+      removeBaseline(extensionDir, files);
+    }
     cleanupLegacyBackups(files);
 
     const action = options.uninstall ? "Uninstalled" : "Restored from clean baseline";
@@ -1789,6 +1792,7 @@ function restorePatch(extensionDir, manifest, files, options = {}) {
 
   cleanupLegacyBackups(files);
   if (options.uninstall && isCurrentInstallClean(files)) {
+    removeNotificationShortcuts();
     removeBaseline(extensionDir, files);
     console.log(`Uninstalled: no matching baseline was present and the extension is already clean.`);
     return;
@@ -1845,6 +1849,24 @@ function removeBaseline(extensionDir, files) {
   if (fs.existsSync(target)) {
     fs.rmSync(target, { recursive: true, force: true });
     console.log(`Removed baseline: ${target}`);
+  }
+}
+
+function removeNotificationShortcuts() {
+  if (process.platform !== "win32") return;
+  const appData = process.env.APPDATA;
+  if (!appData) return;
+  const programs = path.join(appData, "Microsoft", "Windows", "Start Menu", "Programs");
+  const targets = ["vscodexkit.lnk"].map((name) => path.join(programs, name));
+  for (const target of targets) {
+    try {
+      if (fs.existsSync(target)) {
+        fs.unlinkSync(target);
+        console.log(`Removed notification shortcut: ${target}`);
+      }
+    } catch (error) {
+      console.warn(`Failed to remove notification shortcut ${target}: ${error?.message || error}`);
+    }
   }
 }
 

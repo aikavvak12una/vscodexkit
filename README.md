@@ -9,8 +9,7 @@ VSCode 用户数据、工作区数据或项目文件。
 
 - Windows 系统级通知：任务完成、失败、需要审批、需要用户输入。
 - 自动 Retry：当 stream 重试耗尽导致失败时，自动重新发送 retry。
-- 过滤用户手动中断，避免手动停止任务后误报完成或失败通知。
-- 每个扩展版本只保存一份干净原版基线：`.codexpatch/original`。
+- 每个扩展版本备份干净原版基线：`.codexpatch/original`。
 
 ## 使用
 
@@ -55,7 +54,7 @@ node .\bin\vscodexkit.js apply --extension-dir "C:\Users\<you>\.vscode\extension
 `apply` 会在安装后自动检测补丁状态。  
 如果 patch 或检测失败，脚本会在控制台输出异常，并从干净原版基线恢复扩展。
 
-`uninstall` 会恢复原版扩展，并删除 `.codexpatch` 状态目录。
+`uninstall` 会恢复原版扩展，并删除 `.codexpatch` 状态目录和通知快捷方式。
 
 Codex VSCode 扩展更新后，需要重新运行 `apply`。脚本会自动选择最新扩展目录，
 并为新版本生成新的原版基线。脚本不会随 VSCode 启动自动运行。
