@@ -1,0 +1,24 @@
+{
+  "name": "vscodexkit",
+  "version": "0.8.13",
+  "private": true,
+  "description": "Small reversible toolkit for the OpenAI Codex VSCode extension.",
+  "type": "commonjs",
+  "files": [
+    "bin",
+    "README.md"
+  ],
+  "bin": {
+    "vscodexkit": "./bin/vscodexkit.js"
+  },
+  "scripts": {
+    "check": "node ./bin/vscodexkit.js check",
+    "apply": "node ./bin/vscodexkit.js apply",
+    "restore": "node ./bin/vscodexkit.js restore",
+    "uninstall": "node ./bin/vscodexkit.js uninstall",
+    "test-notify": "node ./bin/vscodexkit.js test-notify"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
