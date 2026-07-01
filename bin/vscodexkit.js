@@ -6,7 +6,7 @@ const path = require("path");
 const childProcess = require("child_process");
 const crypto = require("crypto");
 
-const VERSION = "0.8.13";
+const VERSION = "0.8.14";
 const EXTENSION_DIR_PREFIX = "openai.chatgpt-";
 const EXTENSION_JS = path.join("out", "extension.js");
 const WEBVIEW_INDEX = path.join("webview", "index.html");
@@ -935,6 +935,31 @@ const WEBVIEW_UI_SOURCE_LITE = `/* codexpatch:v8:webview-ui-diagnostic-lite */
 })();
 `;
 
+function buildInitialSettings(options) {
+  return {
+    notify: options.notify !== false,
+    autoRetry: options.autoRetry !== false,
+    retryDelayMs: 1500
+  };
+}
+
+function buildNotificationHandler(options) {
+  const settings = JSON.stringify(buildInitialSettings(options));
+  return V10_NOTIFICATION_HANDLER.replace(
+    "function cpText(e){",
+    `globalThis.__codexpatchSettings=${settings};\nfunction cpText(e){`
+  );
+}
+
+function buildWebviewUiSourceLite(options) {
+  const settings = buildInitialSettings(options);
+  const source = `const SETTINGS = { notify: ${settings.notify}, autoRetry: ${settings.autoRetry}, retryDelayMs: ${settings.retryDelayMs} };`;
+  return WEBVIEW_UI_SOURCE_LITE.replace(
+    "const SETTINGS = { notify: true, autoRetry: true, retryDelayMs: 1500 };",
+    source
+  );
+}
+
 const APP_MAIN_INTERRUPT_ANCHOR =
   '"interrupt-conversation":mM(async(e,{conversationId:t,initiatedBy:n},r)=>{let i=await e.interruptConversation(t);n===`user`&&i!=null&&r.markTurnInterruptedByThisClient(t,i)})';
 
@@ -985,7 +1010,7 @@ function main() {
       assertPatchInstalled(manifest, files);
       cleanupLegacyBackups(files);
       cleanupOldExtensionState(extensionDir);
-      showScriptNotification("vscodexkit 已安装", "检测通过，脚本正常工作。", "Info");
+      if (options.notify !== false) showScriptNotification("vscodexkit 已安装", "检测通过，脚本正常工作。", "Info");
     } catch (error) {
       console.error("Apply/check failed. Restoring the original extension from the clean baseline.");
       console.error(error && error.stack ? error.stack : String(error));
@@ -1012,7 +1037,9 @@ function parseArgs(args) {
   let command = "check";
   const options = {
     extensionDir: null,
-    skipSyntaxCheck: false
+    skipSyntaxCheck: false,
+    notify: true,
+    autoRetry: true
   };
 
   if (args[0] && !args[0].startsWith("-")) {
@@ -1029,6 +1056,14 @@ function parseArgs(args) {
       // Kept as a no-op for older shortcuts; timestamped .bak files are no longer created.
     } else if (arg === "--skip-syntax-check") {
       options.skipSyntaxCheck = true;
+    } else if (arg === "--notify") {
+      options.notify = true;
+    } else if (arg === "--no-notify") {
+      options.notify = false;
+    } else if (arg === "--auto-retry") {
+      options.autoRetry = true;
+    } else if (arg === "--no-auto-retry") {
+      options.autoRetry = false;
     } else if (arg === "-h" || arg === "--help") {
       usage();
     } else {
@@ -1049,13 +1084,14 @@ function usage(error) {
 
 Usage:
   node ./bin/vscodexkit.js check [--extension-dir <dir>]
-  node ./bin/vscodexkit.js apply [--extension-dir <dir>] [--skip-syntax-check]
+  node ./bin/vscodexkit.js apply [--extension-dir <dir>] [--notify|--no-notify] [--auto-retry|--no-auto-retry] [--skip-syntax-check]
   node ./bin/vscodexkit.js restore [--extension-dir <dir>]
   node ./bin/vscodexkit.js uninstall [--extension-dir <dir>]
   node ./bin/vscodexkit.js test-notify
 
 Notes:
   - Only the VSCode extension install directory is patched.
+  - apply defaults to --notify --auto-retry.
   - A single clean baseline is kept under .codexpatch/original; timestamped .bak files are not created.
   - VSCode user data, globalStorage, workspaceStorage, and project files are not touched.
   - uninstall restores the clean baseline and removes vscodexkit state.
@@ -1617,11 +1653,13 @@ function printStatus(extensionDir, manifest, files) {
 function applyPatch(extensionDir, manifest, files, options) {
   const status = getPatchStatus(files);
   const baseline = ensureBaseline(extensionDir, manifest, files, status);
+  const notificationHandler = buildNotificationHandler(options);
+  const webviewUiSource = buildWebviewUiSourceLite(options);
 
   const extensionSourceWithNotify = replaceExactlyOnce(
     baseline.extensionSource,
     ORIGINAL_NOTIFICATION_ANCHOR,
-    V10_NOTIFICATION_HANDLER,
+    notificationHandler,
     "notification anchor in clean baseline"
   );
   const extensionSourceWithHostSettings = replaceExactlyOnce(
@@ -1688,7 +1726,7 @@ function applyPatch(extensionDir, manifest, files, options) {
   if (
     status.extensionSource === extensionSource &&
     status.indexSource === indexSource &&
-    status.uiSource === WEBVIEW_UI_SOURCE_LITE &&
+    status.uiSource === webviewUiSource &&
     status.appMainSource === appMainSource
   ) {
     console.log(`Already patched from clean baseline: ${extensionDir}`);
@@ -1697,7 +1735,7 @@ function applyPatch(extensionDir, manifest, files, options) {
 
   writeTextEnsuringDir(files.extensionJs, extensionSource);
   writeTextEnsuringDir(files.webviewIndex, indexSource);
-  writeTextEnsuringDir(files.webviewUi, WEBVIEW_UI_SOURCE_LITE);
+  writeTextEnsuringDir(files.webviewUi, webviewUiSource);
   writeTextEnsuringDir(files.webviewAppMain, appMainSource);
 
   if (!options.skipSyntaxCheck) {

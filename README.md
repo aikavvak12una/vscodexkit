@@ -31,6 +31,14 @@ node .\bin\vscodexkit.js uninstall
 node .\bin\vscodexkit.js test-notify
 ```
 
+`apply` 默认开启通知和自动 Retry。可以用参数调整：
+
+```powershell
+node .\bin\vscodexkit.js apply --no-notify
+node .\bin\vscodexkit.js apply --no-auto-retry
+node .\bin\vscodexkit.js apply --notify --auto-retry
+```
+
 默认会自动查找最新的 Codex VSCode 扩展目录：
 
 ```text
@@ -54,4 +62,3 @@ node .\bin\vscodexkit.js apply --extension-dir "C:\Users\<you>\.vscode\extension
 
 Codex VSCode 扩展更新后，需要重新运行 `apply`。脚本会自动选择最新扩展目录，
 并为新版本生成新的原版基线。脚本不会随 VSCode 启动自动运行。
-
