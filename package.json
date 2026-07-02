@@ -1,6 +1,6 @@
 {
   "name": "vscodexkit",
-  "version": "0.8.18",
+  "version": "0.8.20",
   "private": true,
   "description": "Small reversible toolkit for the OpenAI Codex VSCode extension.",
   "type": "commonjs",
