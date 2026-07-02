@@ -17,15 +17,6 @@ const BASELINE_ORIGINAL_DIR = path.join(BASELINE_DIR, "original");
 const BASELINE_META = path.join(BASELINE_DIR, "baseline.json");
 
 const MARKERS = {
-  notifyV1: "codexpatch:v1:turn-completed-notify",
-  notifyV2: "codexpatch:v2:turn-completed-notify",
-  notifyV3: "codexpatch:v3:turn-completed-system-notify",
-  notifyV4: "codexpatch:v4:turn-completed-windows-toast",
-  notifyV5: "codexpatch:v5:turn-completed-windows-system-notify",
-  notifyV6: "codexpatch:v6:turn-completed-windows-toast-first",
-  notifyV7: "codexpatch:v7:turn-completed-windows-toast-history",
-  notifyV8: "codexpatch:v8:conversation-end-windows-toast-history",
-  notifyV9: "codexpatch:v9:conversation-end-all-known-states",
   notifyV10: "codexpatch:v14:diagnostic-live-states-message-retry",
   mcpLifecycle: "codexpatch:v1:mcp-lifecycle-conversation-end",
   appServerRequest: "codexpatch:v1:app-server-request-approval",
@@ -34,30 +25,13 @@ const MARKERS = {
   webviewUserInterrupt: "codexpatch:v1:webview-user-interrupt",
   webviewAutoRetry: "codexpatch:v5:webview-auto-retry-message-mode",
   webviewAutoRetryCommand: "codexpatch:v2:webview-auto-retry-message-command",
-  hostSettingsV2: "codexpatch:v2:host-settings",
   hostSettings: "codexpatch:v3:host-settings",
   webviewIndex: "codexpatch:v2:webview-index",
-  webviewUiV2: "codexpatch:v2:webview-ui",
-  webviewUiV3: "codexpatch:v3:webview-ui",
-  webviewUiV4: "codexpatch:v4:webview-ui",
-  webviewUiV5: "codexpatch:v5:webview-ui",
-  webviewUiV6: "codexpatch:v6:webview-ui",
-  webviewUiV7: "codexpatch:v7:webview-ui",
   webviewUi: "codexpatch:v8:webview-ui-diagnostic-lite"
 };
 
 const ORIGINAL_NOTIFICATION_ANCHOR =
   'e.push(d.registerInternalNotificationHandler(Re=>{Re.method==="turn/completed"&&E.emit("turnComplete")}));';
-
-const V1_NOTIFICATION_HANDLER =
-  'e.push(d.registerInternalNotificationHandler(Re=>{/* codexpatch:v1:turn-completed-notify */if(Re.method==="turn/completed"){E.emit("turnComplete");try{let st=Re.params?.turn?.status,err=Re.params?.turn?.error,msg=err?.message||err?.detail||err?.code||"";if(st==="completed")ut.window.showInformationMessage("Codex 任务已完成");else ut.window.showWarningMessage("Codex 任务结束: "+(st??"unknown")+(msg?": "+String(msg).slice(0,180):""))}catch(_){}}}));';
-
-const V2_NOTIFICATION_HANDLER =
-  'e.push(d.registerInternalNotificationHandler(Re=>{/* codexpatch:v2:turn-completed-notify */if(Re.method==="turn/completed"){E.emit("turnComplete");try{let cfg=globalThis.__codexpatchSettings||{};if(cfg.notify!==false){let st=Re.params?.turn?.status,err=Re.params?.turn?.error,msg=err?.message||err?.detail||err?.code||"";if(st==="completed")ut.window.showInformationMessage("Codex 任务已完成");else ut.window.showWarningMessage("Codex 任务结束: "+(st??"unknown")+(msg?": "+String(msg).slice(0,180):""))}}catch(_){}}}));';
-
-const V3_NOTIFICATION_HANDLER = `e.push(d.registerInternalNotificationHandler(Re=>{/* codexpatch:v3:turn-completed-system-notify */if(Re.method==="turn/completed"){E.emit("turnComplete");try{let cfg=globalThis.__codexpatchSettings||{};if(cfg.notify!==false){let st=Re.params?.turn?.status,err=Re.params?.turn?.error,msg=err?.message||err?.detail||err?.code||"",ok=st==="completed",title="Codex",body=ok?"Codex 任务已完成":"Codex 任务结束: "+(st??"unknown")+(msg?": "+String(msg).slice(0,180):""),sent=false;if(process.platform==="win32")try{let ps="$ErrorActionPreference='SilentlyContinue';Add-Type -AssemblyName System.Windows.Forms;Add-Type -AssemblyName System.Drawing;$icon=if($env:CODEXPATCH_ICON -eq 'Warning'){[System.Windows.Forms.ToolTipIcon]::Warning}else{[System.Windows.Forms.ToolTipIcon]::Info};$n=New-Object System.Windows.Forms.NotifyIcon;$n.Icon=[System.Drawing.SystemIcons]::Information;$n.BalloonTipIcon=$icon;$n.BalloonTipTitle=$env:CODEXPATCH_TITLE;$n.BalloonTipText=$env:CODEXPATCH_BODY;$n.Visible=$true;$n.ShowBalloonTip(5000);Start-Sleep -Milliseconds 5500;$n.Dispose();",cp=require("child_process"),p=cp.spawn("powershell.exe",["-NoProfile","-ExecutionPolicy","Bypass","-WindowStyle","Hidden","-Command",ps],{windowsHide:true,detached:true,stdio:"ignore",env:{...process.env,CODEXPATCH_TITLE:title,CODEXPATCH_BODY:body,CODEXPATCH_ICON:ok?"Info":"Warning"}});p.unref?.(),sent=true}catch(_){}sent||(ok?ut.window.showInformationMessage(body):ut.window.showWarningMessage(body))}}catch(_){}}}));`;
-
-const V4_NOTIFICATION_HANDLER = `e.push(d.registerInternalNotificationHandler(Re=>{/* codexpatch:v4:turn-completed-windows-toast */if(Re.method==="turn/completed"){E.emit("turnComplete");try{let cfg=globalThis.__codexpatchSettings||{};if(cfg.notify!==false){let st=Re.params?.turn?.status,err=Re.params?.turn?.error,msg=err?.message||err?.detail||err?.code||"",ok=st==="completed",title="Codex",body=ok?"Codex 任务已完成":"Codex 任务结束: "+(st??"unknown")+(msg?": "+String(msg).slice(0,180):"");if(process.platform==="win32")try{let ps="$ErrorActionPreference='SilentlyContinue';function Show-CodexToast{try{[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null;[Windows.UI.Notifications.ToastNotification, Windows.UI.Notifications, ContentType = WindowsRuntime] > $null;$template=[Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02);$texts=$template.GetElementsByTagName('text');[void]$texts.Item(0).AppendChild($template.CreateTextNode($env:CODEXPATCH_TITLE));[void]$texts.Item(1).AppendChild($template.CreateTextNode($env:CODEXPATCH_BODY));$toast=[Windows.UI.Notifications.ToastNotification]::new($template);$ids=@($env:CODEXPATCH_AUMID,'Microsoft.VisualStudioCode','Microsoft.VisualStudioCodeInsiders','VSCodium.VSCodium')|Where-Object{$_};foreach($id in $ids){try{[Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($id).Show($toast);return $true}catch{}}}catch{}return $false};if(-not (Show-CodexToast)){Add-Type -AssemblyName System.Windows.Forms;Add-Type -AssemblyName System.Drawing;$icon=if($env:CODEXPATCH_ICON -eq 'Warning'){[System.Windows.Forms.ToolTipIcon]::Warning}else{[System.Windows.Forms.ToolTipIcon]::Info};$n=New-Object System.Windows.Forms.NotifyIcon;$n.Icon=[System.Drawing.SystemIcons]::Information;$n.BalloonTipIcon=$icon;$n.BalloonTipTitle=$env:CODEXPATCH_TITLE;$n.BalloonTipText=$env:CODEXPATCH_BODY;$n.Visible=$true;$n.ShowBalloonTip(5000);Start-Sleep -Milliseconds 5500;$n.Dispose();}",cp=require("child_process"),p=cp.spawn("powershell.exe",["-NoProfile","-ExecutionPolicy","Bypass","-WindowStyle","Hidden","-Sta","-Command",ps],{windowsHide:true,detached:true,stdio:"ignore",env:{...process.env,CODEXPATCH_TITLE:title,CODEXPATCH_BODY:body,CODEXPATCH_ICON:ok?"Info":"Warning",CODEXPATCH_AUMID:"Microsoft.VisualStudioCode"}});p.unref?.()}catch(_){ok?ut.window.showInformationMessage(body):ut.window.showWarningMessage(body)}else ok?ut.window.showInformationMessage(body):ut.window.showWarningMessage(body)}}catch(_){}}}));`;
 
 const WINDOWS_SYSTEM_NOTIFY_PS = `
 $ErrorActionPreference = 'SilentlyContinue'
@@ -256,7 +230,6 @@ function Show-CodexPopup {
 if (-not $script:shown) { [void](Show-CodexPopup) }
 `;
 
-const V5_NOTIFICATION_HANDLER = `e.push(d.registerInternalNotificationHandler(Re=>{/* codexpatch:v5:turn-completed-windows-system-notify */if(Re.method==="turn/completed"){E.emit("turnComplete");try{let cfg=globalThis.__codexpatchSettings||{};if(cfg.notify!==false){let st=Re.params?.turn?.status,err=Re.params?.turn?.error,msg=err?.message||err?.detail||err?.code||"",ok=st==="completed",title="Codex",body=ok?"Codex 任务已完成":"Codex 任务结束: "+(st??"unknown")+(msg?": "+String(msg).slice(0,180):"");if(process.platform==="win32")try{let ps=${JSON.stringify(WINDOWS_SYSTEM_NOTIFY_PS)},cp=require("child_process"),p=cp.spawn("powershell.exe",["-NoProfile","-ExecutionPolicy","Bypass","-WindowStyle","Hidden","-Sta","-Command",ps],{windowsHide:true,detached:true,stdio:"ignore",env:{...process.env,CODEXPATCH_TITLE:title,CODEXPATCH_BODY:body,CODEXPATCH_ICON:ok?"Info":"Warning",CODEXPATCH_AUMID:"Microsoft.VisualStudioCode"}});p.unref?.()}catch(_){ok?ut.window.showInformationMessage(body):ut.window.showWarningMessage(body)}else ok?ut.window.showInformationMessage(body):ut.window.showWarningMessage(body)}}catch(_){}}}));`;
 
 const WINDOWS_SYSTEM_NOTIFY_PS_V6 = WINDOWS_SYSTEM_NOTIFY_PS.replace(
   "[void](Show-CodexToast)\n[void](Show-CodexBalloon)\nif (-not $script:shown) { [void](Show-CodexPopup) }",
@@ -284,31 +257,7 @@ ${WINDOWS_SYSTEM_NOTIFY_PS_V7}
 Write-CodexPatchLog ('end shown=' + $script:shown)
 `;
 
-const V6_NOTIFICATION_HANDLER = `e.push(d.registerInternalNotificationHandler(Re=>{/* codexpatch:v6:turn-completed-windows-toast-first */if(Re.method==="turn/completed"){E.emit("turnComplete");try{let cfg=globalThis.__codexpatchSettings||{};if(cfg.notify!==false){let st=Re.params?.turn?.status,err=Re.params?.turn?.error,msg=err?.message||err?.detail||err?.code||"",ok=st==="completed",title="Codex",body=ok?"Codex 任务已完成":"Codex 任务结束: "+(st??"unknown")+(msg?": "+String(msg).slice(0,180):"");if(process.platform==="win32")try{let ps=${JSON.stringify(WINDOWS_SYSTEM_NOTIFY_PS_V6)},cp=require("child_process"),p=cp.spawn("powershell.exe",["-NoProfile","-ExecutionPolicy","Bypass","-WindowStyle","Hidden","-Sta","-Command",ps],{windowsHide:true,detached:true,stdio:"ignore",env:{...process.env,CODEXPATCH_TITLE:title,CODEXPATCH_BODY:body,CODEXPATCH_ICON:ok?"Info":"Warning",CODEXPATCH_AUMID:"Microsoft.VisualStudioCode"}});p.unref?.()}catch(_){ok?ut.window.showInformationMessage(body):ut.window.showWarningMessage(body)}else ok?ut.window.showInformationMessage(body):ut.window.showWarningMessage(body)}}catch(_){}}}));`;
 
-const V7_NOTIFICATION_HANDLER = `e.push(d.registerInternalNotificationHandler(Re=>{/* codexpatch:v7:turn-completed-windows-toast-history */if(Re.method==="turn/completed"){E.emit("turnComplete");try{let cfg=globalThis.__codexpatchSettings||{};if(cfg.notify!==false){let st=Re.params?.turn?.status,err=Re.params?.turn?.error,msg=err?.message||err?.detail||err?.code||"",ok=st==="completed",title="Codex",body=ok?"Codex 任务已完成":"Codex 任务结束: "+(st??"unknown")+(msg?": "+String(msg).slice(0,180):"");if(process.platform==="win32")try{let ps=${JSON.stringify(WINDOWS_SYSTEM_NOTIFY_PS_V7)},cp=require("child_process"),p=cp.spawn("powershell.exe",["-NoProfile","-ExecutionPolicy","Bypass","-WindowStyle","Hidden","-Sta","-Command",ps],{windowsHide:true,detached:true,stdio:"ignore",env:{...process.env,CODEXPATCH_TITLE:title,CODEXPATCH_BODY:body,CODEXPATCH_ICON:ok?"Info":"Warning",CODEXPATCH_AUMID:"vscodexkit.VSCode",CODEXPATCH_SHORTCUT_TARGET:process.execPath,CODEXPATCH_SHORTCUT_ICON:process.execPath}});p.unref?.()}catch(_){ok?ut.window.showInformationMessage(body):ut.window.showWarningMessage(body)}else ok?ut.window.showInformationMessage(body):ut.window.showWarningMessage(body)}}catch(_){}}}));`;
-
-const V9_NOTIFICATION_HANDLER = `e.push((()=>{/* codexpatch:v9:conversation-end-all-known-states */
-function cpText(e){return e==null?"":typeof e==="string"?e:typeof e==="number"?String(e):""}
-function cpErr(e){return e==null?"":typeof e==="string"?e:cpText(e.message)||cpText(e.detail)||cpText(e.additionalDetails)||cpText(e.code)||cpText(e.error)}
-function cpMsg(e){let r=e?.params||{},n=e?.error||r.error||r.turn?.error||r.payload?.error||r.event?.error;return cpErr(n)||cpText(e?.message)||cpText(r.message)||cpText(r.errorMessage)||cpText(r.reason)||cpText(r.details)}
-function cpConv(e){let r=e?.params||{};return cpText(e?.conversationId)||cpText(e?.threadId)||cpText(r.conversationId)||cpText(r.threadId)||"global"}
-function cpBody(e,r,n){if(e==="completed")return"Codex 任务已完成";let o=r==="codex/event/stream_error"?"Codex 网络错误，任务已停止":r==="codex/event/error"?"Codex 任务发生错误":e==="interrupted"?"Codex 任务已中断":e==="failed"?"Codex 任务失败":"Codex 任务结束: "+(e??"unknown");return n?o+": "+String(n).slice(0,180):o}
-function cpFinal(e){return e==="completed"||e==="failed"||e==="interrupted"}
-function cpActive(){return globalThis.__codexpatchActiveConversations||(globalThis.__codexpatchActiveConversations=new Set)}
-function cpStart(e){try{let r=cpConv(typeof e==="string"?{conversationId:e}:e);cpActive().add(r);globalThis.__codexpatchNotifyLastByConversation?.delete(r)}catch(_){}}
-function cpNotify(e){try{let r=globalThis.__codexpatchSettings||{};if(r.notify===false)return;let n=e?.status||e?.params?.turn?.status||"unknown";if(!cpFinal(n))return;let o=Date.now(),i=globalThis.__codexpatchNotifyLastByConversation||(globalThis.__codexpatchNotifyLastByConversation=new Map),s=cpConv(e),a=i.get(s);if(a&&o-a.at<5e3)return;for(let[e,r]of i)try{o-r.at>6e4&&i.delete(e)}catch(_){}i.set(s,{at:o,status:n});let c=e?.method||"",l=cpMsg(e),u=n==="completed",d="Codex",f=cpBody(n,c,l);if(process.platform==="win32")try{let e=${JSON.stringify(WINDOWS_SYSTEM_NOTIFY_PS_V7)},r=require("child_process"),n=r.spawn("powershell.exe",["-NoProfile","-ExecutionPolicy","Bypass","-WindowStyle","Hidden","-Sta","-Command",e],{windowsHide:true,detached:true,stdio:"ignore",env:{...process.env,CODEXPATCH_TITLE:d,CODEXPATCH_BODY:f,CODEXPATCH_ICON:u?"Info":"Warning",CODEXPATCH_AUMID:"vscodexkit.VSCode",CODEXPATCH_SHORTCUT_TARGET:process.execPath,CODEXPATCH_SHORTCUT_ICON:process.execPath}});n.unref?.()}catch(_){u?ut.window.showInformationMessage(f):ut.window.showWarningMessage(f)}else u?ut.window.showInformationMessage(f):ut.window.showWarningMessage(f)}catch(_){}}
-function cpHandle(e,r){try{let n=e?.status||e?.params?.turn?.status||"unknown";if(n==="inProgress"){cpStart(e);return}if(!cpFinal(n))return;let o=cpConv(e);if(r&&!cpActive().has(o))return;cpActive().delete(o);cpNotify(e)}catch(_){}}
-function cpPath(e){return Array.isArray(e)?e.map(cpText):typeof e==="string"?e.split(/[./]/):[]}
-function cpPathLooksTurn(e){let r=cpPath(e);return r.some(e=>e==="turn"||e==="turns"||e==="conversationTurns"||e==="visibleTurnEntries"||e==="turnHistory")}
-function cpFindStatus(e,r){if(r>6||e==null)return"";if(typeof e==="string")return cpFinal(e)||e==="inProgress"?e:"";if(typeof e!=="object")return"";if(typeof e.status==="string"&&(cpFinal(e.status)||e.status==="inProgress"))return e.status;if(Array.isArray(e)){for(let n=e.length-1;n>=0;n--){let o=cpFindStatus(e[n],r+1);if(o)return o}return""}for(let n of["turn","value","conversationState","latestTurn","entry"]){let o=cpFindStatus(e[n],r+1);if(o)return o}return""}
-function cpLatestTurnStatus(e){let r=e?.turns||e?.conversationTurns||e?.visibleTurnEntries;if(Array.isArray(r))for(let e=r.length-1;e>=0;e--){let n=cpFindStatus(r[e],0);if(n)return n}return cpFindStatus(e,0)}
-function cpStreamStatus(e){let r=e?.change||e?.params?.change||{};if(r.type==="snapshot")return cpLatestTurnStatus(r.conversationState);if(Array.isArray(r.patches)){let e="";for(let n of r.patches){if(!cpPathLooksTurn(n?.path))continue;let r=cpFindStatus(n?.value,0);if(!r&&cpPath(n?.path).at(-1)==="status")r=cpFindStatus(n?.value,0);if(cpFinal(r))return r;if(r==="inProgress")e=r}return e}return cpFindStatus(r,0)}
-globalThis.__codexpatchNotifyConversationEnd=e=>cpHandle(e,false);
-globalThis.__codexpatchNotifyConversationStart=cpStart;
-globalThis.__codexpatchObserveThreadStreamState=e=>{try{let r=cpStreamStatus(e);r&&cpHandle({source:"thread-stream-state",method:"thread-stream-state-changed",conversationId:e?.conversationId,threadId:e?.conversationId,status:r,params:e},true)}catch(_){}};
-return d.registerInternalNotificationHandler(Re=>{if(Re.method==="turn/completed"){E.emit("turnComplete");try{let e=Re.params||{},r=e.turn||{};cpHandle({source:"turn-completed",method:Re.method,conversationId:e.threadId,threadId:e.threadId,turnId:r.id,status:r.status,error:r.error,params:e},false)}catch(_){}}});
-})());`;
 
 const V10_NOTIFICATION_HANDLER = `e.push((()=>{/* codexpatch:v14:diagnostic-live-states-message-retry */
 function cpText(e){return e==null?"":typeof e==="string"?e:typeof e==="number"||typeof e==="boolean"?String(e):""}
@@ -394,9 +343,6 @@ const USER_INTERRUPT_PATCH =
 const HOST_MESSAGE_ANCHOR =
   'switch(r.type){case"ready":break;case"persisted-atom-sync-request":';
 
-const V2_HOST_MESSAGE_PATCH =
-  'switch(r.type){case"codexpatch-settings-update":{/* codexpatch:v2:host-settings */try{let n=r.settings||{};globalThis.__codexpatchSettings={notify:n.notify!==false,autoRetry:n.autoRetry===true,maxRetries:Number(n.maxRetries)||5,retryDelayMs:Number(n.retryDelayMs)||1500}}catch(_){}break}case"ready":break;case"persisted-atom-sync-request":';
-
 const HOST_MESSAGE_PATCH =
   'switch(r.type){case"codexpatch-settings-update":{/* codexpatch:v3:host-settings */try{globalThis.__codexpatchBroadcastToWebview=O=>{try{this.broadcastToAllViews(O)}catch(e){globalThis.__codexpatchLog?.("broadcast-exception",{message:e?.message})}};let n=r.settings||{};globalThis.__codexpatchSettings={notify:n.notify!==false,autoRetry:n.autoRetry!==false,retryDelayMs:Number(n.retryDelayMs)||1500};globalThis.__codexpatchLog?.("settings-update",globalThis.__codexpatchSettings)}catch(_){}break}case"codexpatch-user-interrupt":{try{globalThis.__codexpatchMarkUserInterrupt?.({source:"webview",method:r.method||"codexpatch-user-interrupt",conversationId:r.conversationId,threadId:r.threadId,turnId:r.turnId,requestId:r.requestId,params:r})}catch(e){globalThis.__codexpatchLog?.("webview-user-interrupt-exception",{message:e?.message})}break}case"codexpatch-notify":{try{globalThis.__codexpatchNotifySystem?.({source:"webview",method:"codexpatch/"+(r.kind||"notify"),conversationId:r.conversationId,status:r.status||"approval_needed",kind:r.kind||"info",message:r.message||r.body||"",body:r.body||r.message||""})}catch(e){globalThis.__codexpatchLog?.("webview-notify-exception",{message:e?.message})}break}case"codexpatch-diagnostic":{try{globalThis.__codexpatchLog?.("webview-"+(r.event||"event"),r)}catch(_){}break}case"ready":break;case"persisted-atom-sync-request":';
 
@@ -405,331 +351,6 @@ const WEBVIEW_SCRIPT_ANCHOR =
 
 const WEBVIEW_SCRIPT_PATCH =
   '<script type="module" crossorigin src="./assets/codexpatch-ui.js"></script><!-- codexpatch:v2:webview-index -->\n    <script type="module" crossorigin src="./assets/index-D6d_BZFy.js"></script>';
-
-const WEBVIEW_UI_SOURCE = `/* codexpatch:v7:webview-ui */
-(() => {
-  const KEY = "codexpatch.settings";
-  const DEFAULTS = { notify: true, autoRetry: false, retryDelayMs: 1500 };
-  const MODEL_MENU_MARKERS = "[data-reasoning-slider],[data-reasoning-selected],[data-model-selected]";
-  const PRIMARY_MODEL_MENU_MARKERS = "[data-reasoning-slider],[data-reasoning-selected]";
-  let vscodeApi = null;
-  let lastRetrySignature = "";
-  let pendingRetryTimer = null;
-  let lastRetryClickAt = 0;
-  let menuRenderQueued = false;
-  let retryScanQueued = false;
-
-  function readSettings() {
-    try {
-      const saved = JSON.parse(localStorage.getItem(KEY) || "{}");
-      return {
-        notify: saved.notify !== false,
-        autoRetry: saved.autoRetry === true,
-        retryDelayMs: Number(saved.retryDelayMs) || DEFAULTS.retryDelayMs
-      };
-    } catch (_) {
-      return { ...DEFAULTS };
-    }
-  }
-
-  function writeSettings(next) {
-    localStorage.setItem(KEY, JSON.stringify(next));
-    syncSettings();
-    renderState(next);
-  }
-
-  function updateSettings(patch) {
-    writeSettings({ ...readSettings(), ...patch });
-  }
-
-  function getVsCodeApi() {
-    return vscodeApi || window.__codexpatchVsCodeApi || null;
-  }
-
-  function syncSettings() {
-    const api = getVsCodeApi();
-    if (!api || typeof api.postMessage !== "function") return;
-    try {
-      api.postMessage({ type: "codexpatch-settings-update", settings: readSettings() });
-    } catch (_) {}
-  }
-
-  function wrapAcquireVsCodeApi() {
-    const original = window.acquireVsCodeApi;
-    if (typeof original !== "function" || window.__codexpatchAcquireWrapped) return;
-    window.acquireVsCodeApi = function wrappedAcquireVsCodeApi(...args) {
-      const api = original.apply(this, args);
-      vscodeApi = api;
-      window.__codexpatchVsCodeApi = api;
-      setTimeout(syncSettings, 0);
-      return api;
-    };
-    window.__codexpatchAcquireWrapped = true;
-  }
-
-  function injectStyle() {
-    if (document.getElementById("codexpatch-style")) return;
-    const style = document.createElement("style");
-    style.id = "codexpatch-style";
-    style.textContent = [
-      "#codexpatch-dropdown-section{display:flex;flex-direction:column;width:100%;min-width:0;font:inherit;color:var(--color-token-foreground,var(--vscode-foreground,#d4d4d4));}",
-      "#codexpatch-dropdown-section .codexpatch-separator{box-sizing:border-box;width:100%;padding:var(--padding-row-y,4px) var(--padding-row-x,8px);}",
-      "#codexpatch-dropdown-section .codexpatch-separator::before{content:'';display:block;height:1px;width:100%;background:var(--color-token-menu-border,var(--vscode-menu-separatorBackground,rgb(255 255 255 / .12)));}",
-      "#codexpatch-dropdown-section .codexpatch-title{display:flex;min-height:24px;align-items:center;overflow:hidden;padding:var(--padding-row-y,4px) var(--padding-row-x,8px);color:var(--color-token-description-foreground,var(--vscode-descriptionForeground,#858585));font-size:12px;line-height:16px;white-space:nowrap;text-overflow:ellipsis;}",
-      "#codexpatch-dropdown-section .codexpatch-item{box-sizing:border-box;width:100%;min-height:28px;border:0;border-radius:8px;background:transparent;padding:var(--padding-row-y,4px) var(--padding-row-x,8px);color:var(--color-token-foreground,var(--vscode-foreground,#d4d4d4));font:inherit;font-size:13px;text-align:left;cursor:pointer;outline:0;}",
-      "#codexpatch-dropdown-section .codexpatch-item:hover,#codexpatch-dropdown-section .codexpatch-item:focus-visible{background:var(--color-token-list-hover-background,var(--vscode-list-hoverBackground,rgb(255 255 255 / .08)));}",
-      "#codexpatch-dropdown-section .codexpatch-item-content{display:flex;width:100%;min-width:0;align-items:center;gap:8px;}",
-      "#codexpatch-dropdown-section .codexpatch-label{min-width:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}",
-      "#codexpatch-dropdown-section .codexpatch-state{flex:0 0 auto;color:var(--color-token-description-foreground,var(--vscode-descriptionForeground,#858585));font-size:12px;}"
-    ].join("");
-    document.head.appendChild(style);
-  }
-
-  function removeLegacyStandaloneMenu() {
-    document.getElementById("codexpatch-menu")?.remove();
-    document.getElementById("codexpatch-popover")?.remove();
-  }
-
-  function findIntelligenceTrigger() {
-    const marker = document.querySelector("[data-codex-intelligence-trigger]");
-    if (!marker) return null;
-    let node = marker;
-    while (node && node !== document.documentElement) {
-      if (node.getAttribute?.("aria-controls") && isVisible(node)) return node;
-      node = node.parentElement;
-    }
-    return null;
-  }
-
-  function findControlledMenu(trigger) {
-    if (!trigger) return null;
-    let node = trigger;
-    while (node && node !== document.documentElement) {
-      const contentId = node.getAttribute?.("aria-controls");
-      if (contentId) {
-        const byId = document.getElementById(contentId);
-        if (byId && isVisible(byId) && !byId.closest("#codexpatch-dropdown-section")) return byId;
-      }
-      node = node.parentElement;
-    }
-    return null;
-  }
-
-  function findModelMenuContent() {
-    const trigger = findIntelligenceTrigger();
-    const controlled = findControlledMenu(trigger);
-    if (isModelMenuContent(controlled)) return controlled;
-    return findMenuContainingModelMarker(PRIMARY_MODEL_MENU_MARKERS) ||
-      findMenuContainingModelMarker(MODEL_MENU_MARKERS);
-  }
-
-  function isModelMenuContent(menu) {
-    return !!menu && isVisible(menu) && !!menu.querySelector(MODEL_MENU_MARKERS);
-  }
-
-  function findMenuContainingModelMarker(selector) {
-    const markers = Array.from(document.querySelectorAll(selector));
-    for (const marker of markers) {
-      if (!isVisible(marker)) continue;
-      const menu = marker.closest('[role="menu"]');
-      if (menu && isVisible(menu) && !menu.closest("#codexpatch-dropdown-section")) return menu;
-    }
-    return null;
-  }
-
-  function injectModelMenuSection() {
-    removeLegacyStandaloneMenu();
-    const menu = findModelMenuContent();
-    let section = document.getElementById("codexpatch-dropdown-section");
-    if (!menu) {
-      if (section) section.remove();
-      return;
-    }
-
-    if (section && section.parentElement !== menu) section.remove();
-    if (!section) {
-      section = document.createElement("div");
-      section.id = "codexpatch-dropdown-section";
-      section.innerHTML = [
-        '<div class="codexpatch-separator" aria-hidden="true"></div>',
-        '<div class="codexpatch-title">vscodexkit</div>',
-        '<button class="codexpatch-item" type="button" role="menuitemcheckbox" tabindex="-1" data-codexpatch-action="notify">',
-        '<span class="codexpatch-item-content"><span class="codexpatch-label">自动通知</span><span class="codexpatch-state"></span></span>',
-        '</button>',
-        '<button class="codexpatch-item" type="button" role="menuitemcheckbox" tabindex="-1" data-codexpatch-action="autoretry">',
-        '<span class="codexpatch-item-content"><span class="codexpatch-label">自动 Retry</span><span class="codexpatch-state"></span></span>',
-        '</button>'
-      ].join("");
-      section.addEventListener("pointerdown", (event) => {
-        event.stopPropagation();
-      });
-      section.addEventListener("click", (event) => {
-        const item = event.target.closest("[data-codexpatch-action]");
-        if (!item) return;
-        event.preventDefault();
-        event.stopPropagation();
-        toggleMenuItem(item.getAttribute("data-codexpatch-action"));
-      });
-      section.addEventListener("keydown", (event) => {
-        if (event.key !== "Enter" && event.key !== " ") return;
-        const item = event.target.closest("[data-codexpatch-action]");
-        if (!item) return;
-        event.preventDefault();
-        event.stopPropagation();
-        toggleMenuItem(item.getAttribute("data-codexpatch-action"));
-      });
-    }
-    if (section.parentElement !== menu) {
-      menu.appendChild(section);
-    }
-    renderState(readSettings());
-  }
-
-  function toggleMenuItem(action) {
-    const settings = readSettings();
-    if (action === "notify") {
-      updateSettings({ notify: settings.notify === false });
-    } else if (action === "autoretry") {
-      updateSettings({ autoRetry: settings.autoRetry !== true });
-    }
-  }
-
-  function renderState(settings) {
-    const states = {
-      notify: settings.notify !== false,
-      autoretry: settings.autoRetry === true
-    };
-    for (const [action, enabled] of Object.entries(states)) {
-      const item = document.querySelector('[data-codexpatch-action="' + action + '"]');
-      if (!item) continue;
-      const enabledText = String(enabled);
-      if (item.getAttribute("aria-checked") !== enabledText) item.setAttribute("aria-checked", enabledText);
-      if (item.dataset.enabled !== enabledText) item.dataset.enabled = enabledText;
-      const state = item.querySelector(".codexpatch-state");
-      const label = enabled ? "开" : "关";
-      if (state && state.textContent !== label) state.textContent = label;
-    }
-  }
-
-  function isVisible(element) {
-    const rect = element.getBoundingClientRect();
-    const style = window.getComputedStyle(element);
-    return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
-  }
-
-  function getElementLabel(element) {
-    return [
-      element.textContent || "",
-      element.getAttribute("aria-label") || "",
-      element.getAttribute("title") || "",
-      element.getAttribute("data-testid") || "",
-      element.getAttribute("data-test-id") || ""
-    ].join(" ").replace(/\\s+/g, " ").trim().toLowerCase();
-  }
-
-  function buttonSignature(button) {
-    return [getElementLabel(button), location.pathname, location.hash].join("|");
-  }
-
-  function retryButtonScore(button) {
-    const label = getElementLabel(button);
-    if (!label) return 0;
-    if (/^(retry|try again|重试|再试一次|重新尝试)$/.test(label)) return 100;
-    if (/(^|\\b)(retry|try again)(\\b|$)/.test(label)) return 80;
-    if (/重试|再试一次|重新尝试/.test(label)) return 80;
-    return 0;
-  }
-
-  function findRetryButton() {
-    const candidates = Array.from(document.querySelectorAll("button,[role='button']"));
-    let best = null;
-    let bestScore = 0;
-    for (const button of candidates) {
-      if (!button || button.closest("#codexpatch-dropdown-section")) continue;
-      if (button.disabled || button.getAttribute("aria-disabled") === "true") continue;
-      if (!isVisible(button)) continue;
-      const score = retryButtonScore(button);
-      if (score > bestScore) {
-        best = button;
-        bestScore = score;
-      }
-    }
-    return best;
-  }
-
-  function maybeAutoRetry() {
-    const settings = readSettings();
-    if (settings.autoRetry !== true) return;
-    const button = findRetryButton();
-    if (!button) {
-      lastRetrySignature = "";
-      return;
-    }
-    const signature = buttonSignature(button);
-    const now = Date.now();
-    if (signature === lastRetrySignature && now - lastRetryClickAt < 10000) return;
-    if (pendingRetryTimer) return;
-    pendingRetryTimer = window.setTimeout(() => {
-      pendingRetryTimer = null;
-      const latest = findRetryButton();
-      if (!latest || buttonSignature(latest) !== signature) return;
-      lastRetrySignature = signature;
-      lastRetryClickAt = Date.now();
-      latest.click();
-    }, Number(settings.retryDelayMs) || 1500);
-  }
-
-  function startAutoRetryObserver() {
-    const observer = new MutationObserver(() => {
-      scheduleModelMenuInjection();
-      scheduleAutoRetryScan();
-    });
-    observer.observe(document.body || document.documentElement, { childList: true, subtree: true });
-    window.setInterval(scheduleModelMenuInjection, 1000);
-    window.setInterval(scheduleAutoRetryScan, 1500);
-  }
-
-  function scheduleModelMenuInjection() {
-    if (menuRenderQueued) return;
-    menuRenderQueued = true;
-    const run = () => {
-      menuRenderQueued = false;
-      injectModelMenuSection();
-    };
-    if (typeof window.requestAnimationFrame === "function") {
-      window.requestAnimationFrame(run);
-    } else {
-      window.setTimeout(run, 0);
-    }
-  }
-
-  function scheduleAutoRetryScan() {
-    if (retryScanQueued) return;
-    retryScanQueued = true;
-    window.setTimeout(() => {
-      retryScanQueued = false;
-      maybeAutoRetry();
-    }, 250);
-  }
-
-  function boot() {
-    if (window.__codexpatchBooted) return;
-    window.__codexpatchBooted = true;
-    wrapAcquireVsCodeApi();
-    injectStyle();
-    removeLegacyStandaloneMenu();
-    injectModelMenuSection();
-    syncSettings();
-    startAutoRetryObserver();
-  }
-
-  if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", boot, { once: true });
-  } else {
-    boot();
-  }
-})();
-`;
 
 const WEBVIEW_UI_SOURCE_LITE = `/* codexpatch:v8:webview-ui-diagnostic-lite */
 (() => {
@@ -1019,7 +640,6 @@ function main() {
     try {
       applyPatch(extensionDir, manifest, files, options);
       assertPatchInstalled(manifest, files);
-      cleanupLegacyBackups(files);
       cleanupOldExtensionState(extensionDir);
       if (options.notify !== false) showScriptNotification("vscodexkit 已安装", "检测通过，脚本正常工作。", "Info");
     } catch (error) {
@@ -1062,9 +682,7 @@ function parseArgs(args) {
     if (arg === "--extension-dir") {
       const value = args[++i];
       if (!value) usage("--extension-dir requires a path");
-      options.extensionDir = value;
-    } else if (arg === "--no-backup") {
-      // Kept as a no-op for older shortcuts; timestamped .bak files are no longer created.
+      options.extensionDir = stripMatchingQuotes(value);
     } else if (arg === "--skip-syntax-check") {
       options.skipSyntaxCheck = true;
     } else if (arg === "--notify") {
@@ -1085,6 +703,16 @@ function parseArgs(args) {
   return { command, options };
 }
 
+function stripMatchingQuotes(value) {
+  if (typeof value !== "string" || value.length < 2) return value;
+  const first = value[0];
+  const last = value[value.length - 1];
+  if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
+    return value.slice(1, -1);
+  }
+  return value;
+}
+
 function usage(error) {
   if (error) {
     console.error(error);
@@ -1103,7 +731,7 @@ Usage:
 Notes:
   - Only the VSCode extension install directory is patched.
   - apply defaults to --notify --auto-retry.
-  - A single clean baseline is kept under .codexpatch/original; timestamped .bak files are not created.
+  - A single clean baseline is kept under .codexpatch/original.
   - VSCode user data, globalStorage, workspaceStorage, and project files are not touched.
   - uninstall restores the clean baseline and removes vscodexkit state.
   - Reload VSCode after apply/restore/uninstall.`);
@@ -1370,16 +998,6 @@ function getPatchStatus(files) {
       fs.existsSync(files.baselineWebviewIndex),
     baselineVersion: baselineMeta?.extensionVersion || null,
     notificationPatched: extensionSource.includes(MARKERS.notifyV10),
-    notificationV10: extensionSource.includes(MARKERS.notifyV10),
-    notificationV9: extensionSource.includes(MARKERS.notifyV9),
-    notificationV8: extensionSource.includes(MARKERS.notifyV8),
-    notificationV7: extensionSource.includes(MARKERS.notifyV7),
-    notificationV1: extensionSource.includes(MARKERS.notifyV1),
-    notificationV2: extensionSource.includes(MARKERS.notifyV2),
-    notificationV3: extensionSource.includes(MARKERS.notifyV3),
-    notificationV4: extensionSource.includes(MARKERS.notifyV4),
-    notificationV5: extensionSource.includes(MARKERS.notifyV5),
-    notificationV6: extensionSource.includes(MARKERS.notifyV6),
     notificationAnchorCount: countOccurrences(extensionSource, ORIGINAL_NOTIFICATION_ANCHOR),
     mcpLifecyclePatched: extensionSource.includes(MARKERS.mcpLifecycle),
     mcpLifecycleAnchorCount: countOccurrences(extensionSource, MCP_LIFECYCLE_ANCHOR),
@@ -1397,18 +1015,11 @@ function getPatchStatus(files) {
     webviewAutoRetryCommandAnchorCount: countOccurrences(appMainSource, APP_MAIN_CODEXPATCH_RETRY_COMMAND_ANCHOR),
     webviewAutoRetryAnchorCount: countOccurrences(appMainSource, APP_MAIN_AUTO_RETRY_ANCHOR),
     hostSettingsPatched: extensionSource.includes(MARKERS.hostSettings),
-    hostSettingsV2: extensionSource.includes(MARKERS.hostSettingsV2),
     hostSettingsAnchorCount: countOccurrences(extensionSource, HOST_MESSAGE_ANCHOR),
     webviewIndexPatched: indexSource.includes(MARKERS.webviewIndex),
     webviewIndexAnchorCount: countOccurrences(indexSource, WEBVIEW_SCRIPT_ANCHOR),
     webviewUiExists: uiExists,
-    webviewUiPatched: uiSource.includes(MARKERS.webviewUi),
-    webviewUiV7: uiSource.includes(MARKERS.webviewUiV7),
-    webviewUiV6: uiSource.includes(MARKERS.webviewUiV6),
-    webviewUiV5: uiSource.includes(MARKERS.webviewUiV5),
-    webviewUiV4: uiSource.includes(MARKERS.webviewUiV4),
-    webviewUiV3: uiSource.includes(MARKERS.webviewUiV3),
-    webviewUiV2: uiSource.includes(MARKERS.webviewUiV2)
+    webviewUiPatched: uiSource.includes(MARKERS.webviewUi)
   };
 }
 
@@ -1581,27 +1192,17 @@ function getOptionalCleanSourceForBaseline(filePath, currentSource) {
 
 function isPatchStatusOk(status) {
   return (
-    (status.notificationPatched ||
-      status.notificationV9 ||
-      status.notificationV8 ||
-      status.notificationV7 ||
-      status.notificationV6 ||
-      status.notificationV5 ||
-      status.notificationV4 ||
-      status.notificationV3 ||
-      status.notificationV2 ||
-      status.notificationV1 ||
-      status.notificationAnchorCount === 1) &&
-    (status.mcpLifecyclePatched || status.mcpLifecycleAnchorCount === 1) &&
-    (status.appServerRequestPatched || status.appServerRequestAnchorCount === 1) &&
-    (status.threadStreamStatePatched || status.threadStreamStateAnchorCount === 1) &&
-    (status.userInterruptPatched || status.userInterruptAnchorCount === 1) &&
-    (status.webviewUserInterruptPatched ||
-      (status.webviewInterruptAnchorCount === 1 && status.webviewFollowerInterruptAnchorCount === 1)) &&
-    (status.webviewAutoRetryPatched || status.webviewAutoRetryAnchorCount === 1) &&
-    (status.webviewAutoRetryCommandPatched || status.webviewAutoRetryCommandAnchorCount === 1) &&
-    (status.hostSettingsPatched || status.hostSettingsV2 || status.hostSettingsAnchorCount === 1) &&
-    (status.webviewIndexPatched || status.webviewIndexAnchorCount === 1)
+    status.notificationPatched &&
+    status.mcpLifecyclePatched &&
+    status.appServerRequestPatched &&
+    status.threadStreamStatePatched &&
+    status.userInterruptPatched &&
+    status.hostSettingsPatched &&
+    status.webviewIndexPatched &&
+    status.webviewUiPatched &&
+    status.webviewUserInterruptPatched &&
+    status.webviewAutoRetryPatched &&
+    status.webviewAutoRetryCommandPatched
   );
 }
 
@@ -1626,36 +1227,18 @@ function printStatus(extensionDir, manifest, files) {
   console.log(`Baseline:  ${baseline ? `yes (${baseline.meta.extensionVersion})` : status.baselineAvailable ? `no (stored ${status.baselineVersion})` : "no"}`);
   console.log(`Host patch: ${status.notificationPatched && status.hostSettingsPatched && status.appServerRequestPatched && status.threadStreamStatePatched && status.userInterruptPatched ? "yes" : "no"}`);
   console.log(`Webview:    ${status.webviewIndexPatched && status.webviewUiPatched && status.webviewUserInterruptPatched && status.webviewAutoRetryPatched && status.webviewAutoRetryCommandPatched ? "yes" : "no"}`);
-  console.log(`V1 patch:   ${status.notificationV1 ? "yes" : "no"}`);
-  console.log(`V2 patch:   ${status.notificationV2 ? "yes" : "no"}`);
-  console.log(`V3 patch:   ${status.notificationV3 ? "yes" : "no"}`);
-  console.log(`Notify v4:  ${status.notificationV4 ? "yes" : "no"}`);
-  console.log(`Notify v5:  ${status.notificationV5 ? "yes" : "no"}`);
-  console.log(`Notify v6:  ${status.notificationV6 ? "yes" : "no"}`);
-  console.log(`Notify v7:  ${status.notificationV7 ? "yes" : "no"}`);
-  console.log(`Notify v8:  ${status.notificationV8 ? "yes" : "no"}`);
-  console.log(`Notify v9:  ${status.notificationV9 ? "yes" : "no"}`);
-  console.log(`Notify v10: ${status.notificationV10 ? "yes" : "no"}`);
+  console.log(`Notify:    ${status.notificationPatched ? "yes" : "no"}`);
   console.log(`Lifecycle:  ${status.mcpLifecyclePatched ? "yes" : "no"}`);
   console.log(`App req:    ${status.appServerRequestPatched ? "yes" : "no"}`);
   console.log(`Stream:     ${status.threadStreamStatePatched ? "yes" : "no"}`);
   console.log(`Interrupt:  ${status.userInterruptPatched ? "yes" : "no"}`);
+  console.log(`Settings:   ${status.hostSettingsPatched ? "yes" : "no"}`);
+  console.log(`WV index:   ${status.webviewIndexPatched ? "yes" : "no"}`);
+  console.log(`WV UI:      ${status.webviewUiPatched ? "yes" : "no"}`);
   console.log(`WV int:     ${status.webviewUserInterruptPatched ? "yes" : "no"}`);
   console.log(`WV retry:   ${status.webviewAutoRetryPatched ? "yes" : "no"}`);
   console.log(`WV retry cmd: ${status.webviewAutoRetryCommandPatched ? "yes" : "no"}`);
-  console.log(`Host v2:    ${status.hostSettingsV2 ? "yes" : "no"}`);
-  console.log(`Webview v8: ${status.webviewUiPatched ? "yes" : "no"}`);
-  console.log(`Webview v7: ${status.webviewUiV7 ? "yes" : "no"}`);
-  console.log(`Webview v6: ${status.webviewUiV6 ? "yes" : "no"}`);
-  console.log(`Webview v5: ${status.webviewUiV5 ? "yes" : "no"}`);
-  console.log(`Webview v4: ${status.webviewUiV4 ? "yes" : "no"}`);
-  console.log(`Webview v3: ${status.webviewUiV3 ? "yes" : "no"}`);
-  console.log(`Webview v2: ${status.webviewUiV2 ? "yes" : "no"}`);
   console.log(`Anchors:    notify=${status.notificationAnchorCount} lifecycle=${status.mcpLifecycleAnchorCount} appReq=${status.appServerRequestAnchorCount} stream=${status.threadStreamStateAnchorCount} interrupt=${status.userInterruptAnchorCount} host=${status.hostSettingsAnchorCount} webview=${status.webviewIndexAnchorCount} wvInt=${status.webviewInterruptAnchorCount}/${status.webviewFollowerInterruptAnchorCount} wvRetry=${status.webviewAutoRetryAnchorCount} wvRetryCmd=${status.webviewAutoRetryCommandAnchorCount}`);
-  const legacyBackupCount = listAllBackups(files).length;
-  if (legacyBackupCount > 0) {
-    console.log(`Legacy .bak: ${legacyBackupCount} (removed on apply/uninstall)`);
-  }
 
   const ok = isPatchStatusOk(status);
   console.log(`Status:     ${ok ? "ok" : "unsupported bundle shape; apply will fail closed"}`);
@@ -1790,7 +1373,6 @@ function restorePatch(extensionDir, manifest, files, options = {}) {
       removeNotificationShortcuts();
       removeBaseline(extensionDir, files);
     }
-    cleanupLegacyBackups(files);
 
     const action = options.uninstall ? "Uninstalled" : "Restored from clean baseline";
     console.log(`${action}: ${manifest.publisher}.${manifest.name}@${manifest.version}`);
@@ -1801,7 +1383,6 @@ function restorePatch(extensionDir, manifest, files, options = {}) {
     return;
   }
 
-  cleanupLegacyBackups(files);
   if (options.uninstall && isCurrentInstallClean(files)) {
     removeNotificationShortcuts();
     removeBaseline(extensionDir, files);
@@ -1900,43 +1481,9 @@ function cleanupOldExtensionState(currentExtensionDir) {
   }
 }
 
-function cleanupLegacyBackups(files) {
-  for (const backup of listAllBackups(files)) {
-    if (!backup.endsWith(".bak") || !path.basename(backup).includes(".codexpatch.")) continue;
-    try {
-      fs.unlinkSync(backup);
-      console.log(`Removed legacy backup: ${backup}`);
-    } catch (error) {
-      console.warn(`Failed to remove legacy backup ${backup}: ${error?.message || error}`);
-    }
-  }
-}
-
 function isPathInside(parent, child) {
   const relative = path.relative(path.resolve(parent), path.resolve(child));
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-}
-
-function listAllBackups(files) {
-  return [
-    ...listBackups(files.extensionJs),
-    ...listBackups(files.webviewIndex),
-    ...listBackups(files.webviewUi),
-    ...listBackups(files.webviewAppMain)
-  ];
-}
-
-function listBackups(filePath) {
-  if (!filePath) return [];
-  const dir = path.dirname(filePath);
-  if (!fs.existsSync(dir)) return [];
-  const base = path.basename(filePath);
-  const prefix = `${base}.codexpatch.`;
-  return fs
-    .readdirSync(dir)
-    .filter((name) => name.startsWith(prefix) && name.endsWith(".bak"))
-    .map((name) => path.join(dir, name))
-    .sort();
 }
 
 try {

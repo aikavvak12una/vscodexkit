@@ -12,6 +12,8 @@
     "vscodexkit": "./bin/vscodexkit.js"
   },
   "scripts": {
+    "lint": "node --check ./bin/vscodexkit.js",
+    "test": "npm run lint && npm run check",
     "check": "node ./bin/vscodexkit.js check",
     "apply": "node ./bin/vscodexkit.js apply",
     "restore": "node ./bin/vscodexkit.js restore",
