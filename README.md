@@ -13,7 +13,7 @@ VSCode 用户数据、工作区数据或项目文件。
 
 ## 使用
 
-从 GitHub 克隆项目：
+从 GitHub 克隆项目并安装：
 
 ```powershell
 git clone https://github.com/aikavvak12una/vscodexkit.git
