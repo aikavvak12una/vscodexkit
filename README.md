@@ -11,7 +11,7 @@ VSCode 用户数据、工作区数据或项目文件。
 - 自动 Retry：当 stream 重试耗尽导致失败时，自动重新发送 retry。
 - 每个扩展版本备份干净原版基线：`.codexpatch/original`。
 
-## 使用
+## 快速开始
 
 从 GitHub 克隆项目并安装：
 
@@ -20,6 +20,8 @@ git clone https://github.com/aikavvak12una/vscodexkit.git
 cd vscodexkit
 node .\bin\vscodexkit.js apply
 ```
+
+## 使用
 
 `apply` 默认开启通知和自动 Retry。可以用参数调整：
 
@@ -58,3 +60,6 @@ node .\bin\vscodexkit.js apply --extension-dir "C:\Users\<you>\.vscode\extension
 
 Codex VSCode 扩展更新后，需要重新运行 `apply`。脚本会自动选择最新扩展目录，
 并为新版本生成新的原版基线。脚本不会随 VSCode 启动自动运行。
+
+## 致谢
+[Linux.do社区](https://linux.do/)
