@@ -6,7 +6,7 @@ const path = require("path");
 const childProcess = require("child_process");
 const crypto = require("crypto");
 
-const VERSION = "0.8.20";
+const VERSION = "0.8.21";
 const EXTENSION_DIR_PREFIX = "openai.chatgpt-";
 const EXTENSION_JS = path.join("out", "extension.js");
 const WEBVIEW_INDEX = path.join("webview", "index.html");
@@ -345,12 +345,6 @@ const HOST_MESSAGE_ANCHOR =
 
 const HOST_MESSAGE_PATCH =
   'switch(r.type){case"codexpatch-settings-update":{/* codexpatch:v3:host-settings */try{globalThis.__codexpatchBroadcastToWebview=O=>{try{this.broadcastToAllViews(O)}catch(e){globalThis.__codexpatchLog?.("broadcast-exception",{message:e?.message})}};let n=r.settings||{};globalThis.__codexpatchSettings={notify:n.notify!==false,autoRetry:n.autoRetry!==false,retryDelayMs:Number(n.retryDelayMs)||1500};globalThis.__codexpatchLog?.("settings-update",globalThis.__codexpatchSettings)}catch(_){}break}case"codexpatch-user-interrupt":{try{globalThis.__codexpatchMarkUserInterrupt?.({source:"webview",method:r.method||"codexpatch-user-interrupt",conversationId:r.conversationId,threadId:r.threadId,turnId:r.turnId,requestId:r.requestId,params:r})}catch(e){globalThis.__codexpatchLog?.("webview-user-interrupt-exception",{message:e?.message})}break}case"codexpatch-notify":{try{globalThis.__codexpatchNotifySystem?.({source:"webview",method:"codexpatch/"+(r.kind||"notify"),conversationId:r.conversationId,status:r.status||"approval_needed",kind:r.kind||"info",message:r.message||r.body||"",body:r.body||r.message||""})}catch(e){globalThis.__codexpatchLog?.("webview-notify-exception",{message:e?.message})}break}case"codexpatch-diagnostic":{try{globalThis.__codexpatchLog?.("webview-"+(r.event||"event"),r)}catch(_){}break}case"ready":break;case"persisted-atom-sync-request":';
-
-const WEBVIEW_SCRIPT_ANCHOR =
-  '<script type="module" crossorigin src="./assets/index-D6d_BZFy.js"></script>';
-
-const WEBVIEW_SCRIPT_PATCH =
-  '<script type="module" crossorigin src="./assets/codexpatch-ui.js"></script><!-- codexpatch:v2:webview-index -->\n    <script type="module" crossorigin src="./assets/index-D6d_BZFy.js"></script>';
 
 const WEBVIEW_UI_SOURCE_LITE = `/* codexpatch:v8:webview-ui-diagnostic-lite */
 (() => {
@@ -1017,7 +1011,7 @@ function getPatchStatus(files) {
     hostSettingsPatched: extensionSource.includes(MARKERS.hostSettings),
     hostSettingsAnchorCount: countOccurrences(extensionSource, HOST_MESSAGE_ANCHOR),
     webviewIndexPatched: indexSource.includes(MARKERS.webviewIndex),
-    webviewIndexAnchorCount: countOccurrences(indexSource, WEBVIEW_SCRIPT_ANCHOR),
+    webviewIndexAnchorCount: countWebviewEntryScriptAnchors(indexSource),
     webviewUiExists: uiExists,
     webviewUiPatched: uiSource.includes(MARKERS.webviewUi)
   };
@@ -1244,6 +1238,31 @@ function printStatus(extensionDir, manifest, files) {
   console.log(`Status:     ${ok ? "ok" : "unsupported bundle shape; apply will fail closed"}`);
 }
 
+function findWebviewEntryScriptAnchors(source) {
+  const regex =
+    /<script\b(?=[^>]*\btype=(["'])module\1)(?=[^>]*\bsrc=(["'])\.\/assets\/index-[^"']+\.js\2)[^>]*><\/script>/g;
+  const matches = [];
+  for (const match of source.matchAll(regex)) {
+    matches.push(match[0]);
+  }
+  return matches;
+}
+
+function countWebviewEntryScriptAnchors(source) {
+  return findWebviewEntryScriptAnchors(source).length;
+}
+
+function patchWebviewIndex(source) {
+  const anchors = findWebviewEntryScriptAnchors(source);
+  if (anchors.length !== 1) {
+    throw new Error(`Expected exactly one webview entry script anchor in clean baseline, found ${anchors.length}.`);
+  }
+  const anchor = anchors[0];
+  const replacement =
+    `<script type="module" crossorigin src="./assets/codexpatch-ui.js"></script><!-- ${MARKERS.webviewIndex} -->\n    ${anchor}`;
+  return source.replace(anchor, replacement);
+}
+
 function applyPatch(extensionDir, manifest, files, options) {
   const status = getPatchStatus(files);
   const baseline = ensureBaseline(extensionDir, manifest, files, status);
@@ -1286,12 +1305,7 @@ function applyPatch(extensionDir, manifest, files, options) {
     THREAD_STREAM_STATE_PATCH,
     "thread stream state anchor in clean baseline"
   );
-  const indexSource = replaceExactlyOnce(
-    baseline.indexSource,
-    WEBVIEW_SCRIPT_ANCHOR,
-    WEBVIEW_SCRIPT_PATCH,
-    "webview script anchor in clean baseline"
-  );
+  const indexSource = patchWebviewIndex(baseline.indexSource);
   const appMainWithInterrupt = replaceExactlyOnce(
     baseline.appMainSource,
     APP_MAIN_INTERRUPT_ANCHOR,
