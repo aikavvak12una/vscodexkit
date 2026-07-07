@@ -23,12 +23,13 @@ node .\bin\vscodexkit.js apply
 
 ## 使用
 
-`apply` 默认开启通知和自动 Retry。可以用参数调整：
+`apply` 默认开启运行时通知和自动 Retry。`--no-notify` 只是不弹安装成功通知，不会关闭任务完成/审批通知：
 
 ```powershell
 node .\bin\vscodexkit.js apply --no-notify
+node .\bin\vscodexkit.js apply --no-runtime-notify
 node .\bin\vscodexkit.js apply --no-auto-retry
-node .\bin\vscodexkit.js apply --notify --auto-retry
+node .\bin\vscodexkit.js apply --runtime-notify --auto-retry
 ```
 
 卸载并恢复原版扩展：

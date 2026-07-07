@@ -6,7 +6,7 @@ const path = require("path");
 const childProcess = require("child_process");
 const crypto = require("crypto");
 
-const VERSION = "0.8.21";
+const VERSION = "0.8.24";
 const EXTENSION_DIR_PREFIX = "openai.chatgpt-";
 const EXTENSION_JS = path.join("out", "extension.js");
 const WEBVIEW_INDEX = path.join("webview", "index.html");
@@ -17,7 +17,7 @@ const BASELINE_ORIGINAL_DIR = path.join(BASELINE_DIR, "original");
 const BASELINE_META = path.join(BASELINE_DIR, "baseline.json");
 
 const MARKERS = {
-  notifyV10: "codexpatch:v14:diagnostic-live-states-message-retry",
+  notifyV10: "codexpatch:v17:no-notify-install-decoupled",
   mcpLifecycle: "codexpatch:v1:mcp-lifecycle-conversation-end",
   appServerRequest: "codexpatch:v1:app-server-request-approval",
   threadStreamState: "codexpatch:v1:thread-stream-state-conversation-end",
@@ -259,7 +259,7 @@ Write-CodexPatchLog ('end shown=' + $script:shown)
 
 
 
-const V10_NOTIFICATION_HANDLER = `e.push((()=>{/* codexpatch:v14:diagnostic-live-states-message-retry */
+const V10_NOTIFICATION_HANDLER = `e.push((()=>{/* codexpatch:v17:no-notify-install-decoupled */
 function cpText(e){return e==null?"":typeof e==="string"?e:typeof e==="number"||typeof e==="boolean"?String(e):""}
 function cpJson(e){try{return JSON.stringify(e,(r,n)=>typeof n==="string"&&n.length>240?n.slice(0,240)+"...":n)}catch(_){return""}}
 function cpMod(){try{return{fs:require("fs"),os:require("os"),path:require("path"),cp:require("child_process")}}catch(_){return null}}
@@ -284,17 +284,18 @@ function cpRequestId(e){let r=e?.params||{};return cpText(e?.requestId)||cpText(
 function cpAssistantText(e){return cpText(e?.content)||cpText(e?.text)||cpText(e?.message)||cpText(e?.output)||cpText(e?.summary)}
 function cpItemIndexOf(e){let r=cpPath(e),n=r.findIndex(e=>e==="items");return n>=0&&/^\\d+$/.test(cpText(r[n+1]))?Number(r[n+1]):-1}
 function cpLooksUserItem(e){let r=cpText(e?.type).toLowerCase(),n=cpText(e?.role).toLowerCase();return n==="user"||r==="usermessage"||r==="user_message"||r==="user-message"}
-function cpLooksOutputItem(e){if(e==null||typeof e!=="object"||Array.isArray(e))return false;if(cpLooksUserItem(e))return false;let r=cpText(e.type).toLowerCase(),n=cpText(e.role).toLowerCase(),o=cpAssistantText(e);if(o.trim().length>0)return true;if(n==="assistant")return true;if(/assistant|agent|reasoning|tool|command|exec|terminal|patch|diff|file|browser|image|plan|todo|thinking|message/.test(r))return true;if(typeof e.status==="string"&&r&&r!=="error")return true;return false}
-function cpObjHasAssistantOutput(e,r=0){if(r>8||e==null)return false;if(typeof e==="string")return false;if(Array.isArray(e))return e.some(e=>cpObjHasAssistantOutput(e,r+1));if(typeof e!=="object")return false;if(cpLooksOutputItem(e))return true;let n=cpText(e.type).toLowerCase(),o=cpText(e.role).toLowerCase(),i=cpAssistantText(e);if((n==="assistant-message"||n==="assistant_message"||o==="assistant")&&i.trim().length>0)return true;if(Array.isArray(e.items)){for(let r=0;r<e.items.length;r++)if(r>0||cpLooksOutputItem(e.items[r])||cpObjHasAssistantOutput(e.items[r],1))return true}for(let n of["item","value","delta","message","entry","turn","payload"])if(cpObjHasAssistantOutput(e[n],r+1))return true;if(Array.isArray(e.content)&&e.content.some(e=>cpObjHasAssistantOutput(e,r+1)))return true;return false}
+function cpLooksErrorItem(e){let r=cpText(e?.type).toLowerCase(),n=cpText(e?.role).toLowerCase(),o=cpText(e?.status).toLowerCase();return n==="error"||/error|failure|failed|warning|notification|retry/.test(r)||o==="failed"&&r&&!/assistant|tool|command|exec|terminal/.test(r)}
+function cpLooksOutputItem(e){if(e==null||typeof e!=="object"||Array.isArray(e))return false;if(cpLooksUserItem(e)||cpLooksErrorItem(e))return false;let r=cpText(e.type).toLowerCase(),n=cpText(e.role).toLowerCase(),o=cpAssistantText(e).trim();if(!o)return false;return n==="assistant"||/assistant|agent|reasoning|tool|command|exec|terminal|patch|diff|file|browser|image|plan|todo|thinking/.test(r)}
+function cpObjHasAssistantOutput(e,r=0,n=false){if(r>8||e==null)return false;if(typeof e==="string")return n&&e.trim().length>0;if(Array.isArray(e))return e.some(e=>cpObjHasAssistantOutput(e,r+1,n));if(typeof e!=="object")return false;if(cpLooksUserItem(e)||cpLooksErrorItem(e))return false;if(cpLooksOutputItem(e))return true;let o=cpText(e.type).toLowerCase(),i=cpText(e.role).toLowerCase(),s=n||i==="assistant"||/assistant|agent|reasoning|tool|command|exec|terminal|patch|diff|file|browser|image|plan|todo|thinking/.test(o),a=cpAssistantText(e).trim();if(s&&a)return true;if(Array.isArray(e.items)&&e.items.some(e=>cpObjHasAssistantOutput(e,r+1,false)))return true;for(let n of["item","value","delta","message","entry","turn","payload"])if(cpObjHasAssistantOutput(e[n],r+1,s))return true;if(Array.isArray(e.content)&&e.content.some(e=>cpObjHasAssistantOutput(e,r+1,s)))return true;return false}
 function cpOutputMap(){return globalThis.__codexpatchAssistantOutputByConversation||(globalThis.__codexpatchAssistantOutputByConversation=new Map)}
 function cpTurnPathOf(e){let r=cpPath(e),n=r.findIndex(e=>e==="turns"||e==="conversationTurns"||e==="visibleTurnEntries");return n>=0&&r[n+1]!=null?r.slice(n,n+2).join("."):""}
-function cpPathLooksAssistantOutput(e,r){let n=cpItemIndexOf(e);if(n>0)return true;if(n===0&&cpLooksOutputItem(r))return true;return false}
+function cpPathLooksAssistantOutput(e,r){return cpObjHasAssistantOutput(r)}
 function cpRememberTurnPatch(e,r,n){try{let o=cpConv(e);if(!o||o==="global")return;let i=Date.now(),s=cpOutputMap();for(let[e,r]of s)try{i-r.at>6e5&&s.delete(e)}catch(_){}let a=cpTurnPathOf(r),c=cpFindStatus(n,0),l=cpText(n?.turnId)||cpText(n?.id),u=s.get(o)||{hasOutput:false,at:i};if(a&&u.turnPath&&u.turnPath!==a)u={hasOutput:false,at:i};if(!a&&c==="inProgress"&&l&&u.turnId&&u.turnId!==l&&!u.turnPath)u={hasOutput:false,at:i};if(a)u.turnPath=a;else if(l&&!u.turnId)u.turnId=l;if(cpPathLooksAssistantOutput(r,n)||cpObjHasAssistantOutput(n))u.hasOutput=true;u.at=i;s.set(o,u);if(u.hasOutput)cpLog("auto-retry-output-seen",{conversationId:o,turnId:u.turnId||"",turnPath:u.turnPath||"",itemIndex:cpItemIndexOf(r)})}catch(r){cpLog("auto-retry-output-track-exception",{message:r?.message})}}
 function cpRememberAssistantOutput(e){try{let r=e?.change||e?.params?.change||{};if(r.type==="snapshot"){let n=r.conversationState?.turns||r.conversationState?.conversationTurns||r.conversationState?.visibleTurnEntries;if(Array.isArray(n))for(let r=n.length-1;r>=0;r--){if(cpFindStatus(n[r],0)==="inProgress"){cpRememberTurnPatch(e,["turns",r],n[r]);break}}return}if(Array.isArray(r.patches)){for(let n of r.patches){if(cpPathLooksTurn(n?.path))cpRememberTurnPatch(e,n.path,n?.value)}return}cpRememberTurnPatch(e,[],r)}catch(r){cpLog("auto-retry-output-observe-exception",{message:r?.message})}}
 function cpHasAssistantOutputForRetry(e){try{if(cpObjHasAssistantOutput(e?.params?.turn)||cpObjHasAssistantOutput(e?.turn))return true;let r=cpConv(e),n=cpTurnId(e),o=cpOutputMap().get(r);if(!o?.hasOutput)return false;if(o.turnPath)return true;if(n&&o.turnId&&n!==o.turnId)return false;return true}catch(_){return false}}
 function cpRetryBlob(e){let r=e?.params||{},n=[e?.source,e?.method,cpStatus(e),cpMsg(e),e?.error?.code,r.error?.code,r.turn?.error?.code,r.reason,r.details,r.errorMessage,cpJson(e?.error),cpJson(e?.change),cpJson(r.change),cpJson(r.error),cpJson(r.turn?.error),cpJson(r.payload?.error),cpJson(r.event?.error)].join(" ");return n.slice(0,12e3).toLowerCase()}
 function cpLooksStreamRetryExhausted(e){let r=cpRetryBlob(e),n=(cpText(e?.source)+" "+cpText(e?.method)).toLowerCase(),o=/stream_error|thread-stream-state/.test(n)||/\\bstream\\b|stream[_ -]?/.test(r),i=cpStatus(e)==="failed"&&/(currently experiencing high demand|temporary errors?|temporarily unavailable|service unavailable|overloaded|too many requests|rate limit|\\b429\\b|\\b502\\b|\\b503\\b|\\b504\\b|gateway timeout|network error|fetch failed|failed to fetch|request failed|error sending request|stream disconnected|connection (?:reset|refused|closed|terminated)|econnreset|etimedout|eai_again|enotfound|timed?\\s*out)/.test(r);if(/stream[_ -]?max[_ -]?retries/.test(r))return true;if(i)return true;if(!o)return false;return /max(?:imum)?\\s+retries|retry limit|retries exhausted|exhausted\\s+retries|too many retries|retry attempts? exhausted|all retries failed|stream disconnected|error sending request/.test(r)}
-function cpRequestAutoRetry(e){try{let r=globalThis.__codexpatchSettings||{};if(r.autoRetry!==true){cpLog("auto-retry-skip-disabled",{conversationId:cpConv(e),status:cpStatus(e),method:e?.method});return false}if(cpLooksUserInterrupted(e)){cpLog("auto-retry-skip-user-interrupt",{conversationId:cpConv(e),status:cpStatus(e),method:e?.method});return false}if(!cpLooksStreamRetryExhausted(e)){cpLog("auto-retry-skip-not-stream-max-retries",{conversationId:cpConv(e),status:cpStatus(e),method:e?.method,msg:cpMsg(e)});return false}let n=cpConv(e),o=cpTurnId(e),i=cpHost(e),s=cpModel(e),a=cpHasAssistantOutputForRetry(e)?"message":"rollback",c=n+"|"+(o||cpRequestId(e)||cpMsg(e).slice(0,80))+"|"+cpStatus(e)+"|"+(e?.method||"")+"|"+a,l=Date.now(),u=globalThis.__codexpatchAutoRetryLast||(globalThis.__codexpatchAutoRetryLast=new Map),f=u.get(c);if(f&&l-f<3e4){cpLog("auto-retry-skip-duplicate",{key:c,mode:a});return true}for(let[e,r]of u)try{l-r>12e4&&u.delete(e)}catch(_){}let p={type:"codexpatch-auto-retry",hostId:i,conversationId:n,threadId:n,turnId:o,model:s||null,status:cpStatus(e),method:e?.method||"",reason:"stream_max_retries",mode:a,retryText:a==="message"?"retry":void 0,windowMs:3e4,at:l},h=globalThis.__codexpatchBroadcastToWebview;if(typeof h==="function"){cpLog(a==="message"?"auto-retry-arm-message":"auto-retry-arm",p);h(p);u.set(c,l);return true}else cpLog("auto-retry-no-broadcast",p);return false}catch(r){cpLog("auto-retry-exception",{message:r?.message});return false}}
+function cpRequestAutoRetry(e){try{let r=globalThis.__codexpatchSettings||{};if(r.autoRetry!==true){cpLog("auto-retry-skip-disabled",{conversationId:cpConv(e),status:cpStatus(e),method:e?.method});return false}if(cpLooksUserInterrupted(e)){cpLog("auto-retry-skip-user-interrupt",{conversationId:cpConv(e),status:cpStatus(e),method:e?.method});return false}if(!cpLooksStreamRetryExhausted(e)){cpLog("auto-retry-skip-not-stream-max-retries",{conversationId:cpConv(e),status:cpStatus(e),method:e?.method,msg:cpMsg(e)});return false}let n=cpConv(e),o=cpTurnId(e),i=cpHost(e),s=cpModel(e),a="rollback",c=n+"|"+(o||cpRequestId(e)||cpMsg(e).slice(0,80))+"|"+cpStatus(e)+"|"+(e?.method||"")+"|"+a,l=Date.now(),u=globalThis.__codexpatchAutoRetryLast||(globalThis.__codexpatchAutoRetryLast=new Map),f=u.get(c);if(f&&l-f<3e4){cpLog("auto-retry-skip-duplicate",{key:c,mode:a});return true}for(let[e,r]of u)try{l-r>12e4&&u.delete(e)}catch(_){}let p={type:"codexpatch-auto-retry",hostId:i,conversationId:n,threadId:n,turnId:o,model:s||null,status:cpStatus(e),method:e?.method||"",reason:"stream_max_retries",mode:a,hadTrackedOutput:cpHasAssistantOutputForRetry(e),windowMs:3e4,at:l},h=globalThis.__codexpatchBroadcastToWebview;if(typeof h==="function"){cpLog("auto-retry-arm",p);h(p);u.set(c,l);return true}else cpLog("auto-retry-no-broadcast",p);return false}catch(r){cpLog("auto-retry-exception",{message:r?.message});return false}}
 function cpBody(e,r,n,o){if(o==="approval"||cpApproval(e)||cpAwaitingUserMethod(r)){if(cpAwaitingInputMethod(r))return n||"Codex 需要你回复问题";return n||"Codex 需要你审批操作"}if(e==="completed")return"Codex 任务已完成";let i=r==="codex/event/stream_error"?"Codex 网络错误，任务已停止":r==="codex/event/error"?"Codex 任务发生错误":e==="interrupted"?"Codex 任务已中断":e==="failed"?"Codex 任务失败":"Codex 任务结束: "+(e??"unknown");return n?i+": "+String(n).slice(0,180):i}
 function cpNotify(e){try{let r=globalThis.__codexpatchSettings||{};if(r.notify===false){cpLog("notify-skip-disabled",e);return}let n=cpStatus(e),o=e?.kind||"",i=e?.method||"",s=cpApproval(n)||o==="approval"||cpAwaitingUserMethod(i);if(!s&&!cpFinal(n)){cpLog("notify-skip-not-final",{status:n,kind:o,method:i});return}if(!s&&cpLooksUserInterrupted(e)){cpLog("notify-skip-user-interrupt",{status:n,method:i,msg:cpMsg(e)});return}let a=Date.now(),c=globalThis.__codexpatchNotifyLastByConversation||(globalThis.__codexpatchNotifyLastByConversation=new Map),l=cpConv(e),u=s?"approval":n,d=l+"|"+u+"|"+i+"|"+cpRequestId(e),f=c.get(d);if(f&&a-f<1e4){cpLog("notify-skip-duplicate",{key:d,status:n,kind:o});return}for(let[e,r]of c)try{a-r>12e4&&c.delete(e)}catch(_){}c.set(d,a);let p=cpMsg(e),h=s?"Codex 需要处理":"Codex",g=cpBody(n,i,p,o),m=s||n!=="completed";cpLog("notify-send",{conversationId:l,status:n,kind:o,method:i,body:g});if(process.platform==="win32")try{let e=${JSON.stringify(WINDOWS_SYSTEM_NOTIFY_PS_V8)},r=cpMod(),o=r.path.join(r.os.tmpdir(),"codexpatch-notify.ps1");try{r.fs.writeFileSync(o,e,"utf8");cpLog("notify-script-written",{path:o,bytes:e.length})}catch(e){cpLog("notify-script-write-failed",{message:e?.message})}let n=r.cp.spawn("powershell.exe",["-NoProfile","-ExecutionPolicy","Bypass","-Sta","-File",o],{windowsHide:true,detached:false,stdio:["ignore","ignore","pipe"],env:{...process.env,CODEXPATCH_TITLE:h,CODEXPATCH_BODY:g,CODEXPATCH_ICON:m?"Warning":"Info",CODEXPATCH_EVENT:u,CODEXPATCH_AUMID:"vscodexkit.VSCode",CODEXPATCH_LOG_FILE:process.env.CODEXPATCH_LOG_FILE||r.path.join(r.os.tmpdir(),"codexpatch.log"),CODEXPATCH_SHORTCUT_TARGET:process.execPath,CODEXPATCH_SHORTCUT_ICON:process.execPath}});cpLog("notify-spawned",{pid:n.pid,event:u,file:o});n.stderr?.on?.("data",e=>cpLog("notify-stderr",{message:String(e).slice(0,500)}));n.on?.("exit",(e,r)=>cpLog("notify-exit",{code:e,signal:r,event:u}));n.on?.("error",e=>cpLog("notify-spawn-error",{message:e?.message}));return}catch(e){cpLog("notify-spawn-exception",{message:e?.message})}m?ut.window.showWarningMessage(g):ut.window.showInformationMessage(g)}catch(e){cpLog("notify-exception",{message:e?.message})}}
 function cpStart(e){try{let r=cpConv(typeof e==="string"?{conversationId:e}:e);(globalThis.__codexpatchActiveConversations||(globalThis.__codexpatchActiveConversations=new Set)).add(r);if(typeof e==="string")try{cpOutputMap().delete(r)}catch(_){}cpLog("conversation-start",{conversationId:r,source:e?.source,method:e?.method})}catch(_){}}
@@ -563,7 +564,7 @@ const WEBVIEW_UI_SOURCE_LITE = `/* codexpatch:v8:webview-ui-diagnostic-lite */
 
 function buildInitialSettings(options) {
   return {
-    notify: options.notify !== false,
+    notify: options.runtimeNotify !== false,
     autoRetry: options.autoRetry !== false,
     retryDelayMs: 1500
   };
@@ -608,7 +609,7 @@ const APP_MAIN_AUTO_RETRY_ANCHOR =
   'case`ipc-broadcast`:e.method===`automation-capability-event`&&e.sourceClientId===`desktop`&&e.version===ze(`automation-capability-event`)&&QO(r,i.getForHostId(e.params.hostId),e.params),uk({claimAppConnectOAuthCallback:p,isCompactWindow:d,message:e,navigate:a,queryClient:c});break bb35;case`thread-follower-start-turn-request`:';
 
 const APP_MAIN_AUTO_RETRY_PATCH =
-  'case`codexpatch-auto-retry`:{/* codexpatch:v5:webview-auto-retry-message-mode */try{let t=e.conversationId??e.threadId,n=t?(e.turnId||r.get(Nr,t)?.turnId):e.turnId,o=t?(e.model??r.get(Nr,t)?.params?.model??null):e.model,i=e.mode===`message`||e.retryMode===`message`;if(!t||!i&&!n){B.dispatchMessage(`codexpatch-diagnostic`,{event:`auto-retry-send-skip-missing-context`,conversationId:t||``,turnId:n||``,mode:i?`message`:`rollback`});break bb35}let s=globalThis.__codexpatchRetrySent||(globalThis.__codexpatchRetrySent=new Map),c=t+`|`+(n||`latest`)+`|`+(i?`message`:`rollback`),l=Date.now(),u=s.get(c);if(u&&l-u<3e4){B.dispatchMessage(`codexpatch-diagnostic`,{event:`auto-retry-send-skip-duplicate`,conversationId:t,turnId:n,mode:i?`message`:`rollback`});break bb35}for(let[e,t]of s)try{l-t>12e4&&s.delete(e)}catch{}s.set(c,l);try{let r=`codexpatch:auto-retry:`+c,a=localStorage.getItem(r),d=a?Number(a.split(`:`)[0]):0;if(d&&l-d<3e4){B.dispatchMessage(`codexpatch-diagnostic`,{event:`auto-retry-send-skip-shared-duplicate`,conversationId:t,turnId:n,mode:i?`message`:`rollback`});break bb35}let f=l+`:`+Math.random().toString(36).slice(2);localStorage.setItem(r,f);await new Promise(e=>setTimeout(e,30));if(localStorage.getItem(r)!==f){B.dispatchMessage(`codexpatch-diagnostic`,{event:`auto-retry-send-skip-shared-lost`,conversationId:t,turnId:n,mode:i?`message`:`rollback`});break bb35}}catch{}let f=i?`codexpatch-send-retry-message-for-host`:`codexpatch-retry-turn-for-host`;B.dispatchMessage(`codexpatch-diagnostic`,{event:i?`auto-retry-message-send`:`auto-retry-send`,conversationId:t,turnId:n,model:o||``});await W(f,{hostId:e.hostId??zr,conversationId:t,turnId:n,model:o,text:e.retryText??`retry`});B.dispatchMessage(`codexpatch-diagnostic`,{event:i?`auto-retry-message-send-ok`:`auto-retry-send-ok`,conversationId:t,turnId:n})}catch(t){B.dispatchMessage(`codexpatch-diagnostic`,{event:`auto-retry-send-error`,conversationId:e.conversationId||e.threadId||``,message:String(t).slice(0,500)})}break bb35}case`ipc-broadcast`:e.method===`automation-capability-event`&&e.sourceClientId===`desktop`&&e.version===ze(`automation-capability-event`)&&QO(r,i.getForHostId(e.params.hostId),e.params),uk({claimAppConnectOAuthCallback:p,isCompactWindow:d,message:e,navigate:a,queryClient:c});break bb35;case`thread-follower-start-turn-request`:';
+  'case`codexpatch-auto-retry`:{/* codexpatch:v5:webview-auto-retry-message-mode */try{let t=e.conversationId??e.threadId,n=t?(e.turnId||r.get(Nr,t)?.turnId):e.turnId,o=t?(e.model??r.get(Nr,t)?.params?.model??null):e.model,i=e.allowMessageRetry===!0&&(e.mode===`message`||e.retryMode===`message`);if(!t||!i&&!n){B.dispatchMessage(`codexpatch-diagnostic`,{event:`auto-retry-send-skip-missing-context`,conversationId:t||``,turnId:n||``,mode:i?`message`:`rollback`});break bb35}let s=globalThis.__codexpatchRetrySent||(globalThis.__codexpatchRetrySent=new Map),c=t+`|`+(n||`latest`)+`|`+(i?`message`:`rollback`),l=Date.now(),u=s.get(c);if(u&&l-u<3e4){B.dispatchMessage(`codexpatch-diagnostic`,{event:`auto-retry-send-skip-duplicate`,conversationId:t,turnId:n,mode:i?`message`:`rollback`});break bb35}for(let[e,t]of s)try{l-t>12e4&&s.delete(e)}catch{}s.set(c,l);try{let r=`codexpatch:auto-retry:`+c,a=localStorage.getItem(r),d=a?Number(a.split(`:`)[0]):0;if(d&&l-d<3e4){B.dispatchMessage(`codexpatch-diagnostic`,{event:`auto-retry-send-skip-shared-duplicate`,conversationId:t,turnId:n,mode:i?`message`:`rollback`});break bb35}let f=l+`:`+Math.random().toString(36).slice(2);localStorage.setItem(r,f);await new Promise(e=>setTimeout(e,30));if(localStorage.getItem(r)!==f){B.dispatchMessage(`codexpatch-diagnostic`,{event:`auto-retry-send-skip-shared-lost`,conversationId:t,turnId:n,mode:i?`message`:`rollback`});break bb35}}catch{}let f=i?`codexpatch-send-retry-message-for-host`:`codexpatch-retry-turn-for-host`;B.dispatchMessage(`codexpatch-diagnostic`,{event:i?`auto-retry-message-send`:`auto-retry-send`,conversationId:t,turnId:n,model:o||``});await W(f,{hostId:e.hostId??zr,conversationId:t,turnId:n,model:o,text:e.retryText??`retry`});B.dispatchMessage(`codexpatch-diagnostic`,{event:i?`auto-retry-message-send-ok`:`auto-retry-send-ok`,conversationId:t,turnId:n})}catch(t){B.dispatchMessage(`codexpatch-diagnostic`,{event:`auto-retry-send-error`,conversationId:e.conversationId||e.threadId||``,message:String(t).slice(0,500)})}break bb35}case`ipc-broadcast`:e.method===`automation-capability-event`&&e.sourceClientId===`desktop`&&e.version===ze(`automation-capability-event`)&&QO(r,i.getForHostId(e.params.hostId),e.params),uk({claimAppConnectOAuthCallback:p,isCompactWindow:d,message:e,navigate:a,queryClient:c});break bb35;case`thread-follower-start-turn-request`:';
 
 function main() {
   const { command, options } = parseArgs(process.argv.slice(2));
@@ -635,7 +636,7 @@ function main() {
       applyPatch(extensionDir, manifest, files, options);
       assertPatchInstalled(manifest, files);
       cleanupOldExtensionState(extensionDir);
-      if (options.notify !== false) showScriptNotification("vscodexkit 已安装", "检测通过，脚本正常工作。", "Info");
+      if (options.installNotify !== false) showScriptNotification("vscodexkit 已安装", "检测通过，脚本正常工作。", "Info");
     } catch (error) {
       console.error("Apply/check failed. Restoring the original extension from the clean baseline.");
       console.error(error && error.stack ? error.stack : String(error));
@@ -663,7 +664,8 @@ function parseArgs(args) {
   const options = {
     extensionDir: null,
     skipSyntaxCheck: false,
-    notify: true,
+    installNotify: true,
+    runtimeNotify: true,
     autoRetry: true
   };
 
@@ -680,9 +682,13 @@ function parseArgs(args) {
     } else if (arg === "--skip-syntax-check") {
       options.skipSyntaxCheck = true;
     } else if (arg === "--notify") {
-      options.notify = true;
+      options.installNotify = true;
     } else if (arg === "--no-notify") {
-      options.notify = false;
+      options.installNotify = false;
+    } else if (arg === "--runtime-notify") {
+      options.runtimeNotify = true;
+    } else if (arg === "--no-runtime-notify") {
+      options.runtimeNotify = false;
     } else if (arg === "--auto-retry") {
       options.autoRetry = true;
     } else if (arg === "--no-auto-retry") {
@@ -717,14 +723,15 @@ function usage(error) {
 
 Usage:
   node ./bin/vscodexkit.js check [--extension-dir <dir>]
-  node ./bin/vscodexkit.js apply [--extension-dir <dir>] [--notify|--no-notify] [--auto-retry|--no-auto-retry] [--skip-syntax-check]
+  node ./bin/vscodexkit.js apply [--extension-dir <dir>] [--notify|--no-notify] [--runtime-notify|--no-runtime-notify] [--auto-retry|--no-auto-retry] [--skip-syntax-check]
   node ./bin/vscodexkit.js restore [--extension-dir <dir>]
   node ./bin/vscodexkit.js uninstall [--extension-dir <dir>]
   node ./bin/vscodexkit.js test-notify
 
 Notes:
   - Only the VSCode extension install directory is patched.
-  - apply defaults to --notify --auto-retry.
+  - --notify/--no-notify only controls the install success notification.
+  - Runtime Codex notifications default to --runtime-notify; auto retry defaults to --auto-retry.
   - A single clean baseline is kept under .codexpatch/original.
   - VSCode user data, globalStorage, workspaceStorage, and project files are not touched.
   - uninstall restores the clean baseline and removes vscodexkit state.
