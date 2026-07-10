@@ -5,33 +5,86 @@ const fs = require("fs");
 const path = require("path");
 const childProcess = require("child_process");
 const crypto = require("crypto");
+const {
+  RETRY_HANDLER_KEY,
+  inspectWebviewRetryPlan,
+  resolveWebviewRetryPlan
+} = require("../lib/webview-symbol-resolver");
 
-const VERSION = "0.8.24";
+function parseAdbDeviceSerials(output) {
+  const serials = [];
+  const seen = new Set();
+  for (const line of String(output || "").split(/\r?\n/)) {
+    const match = line.trim().match(/^(\S+)\s+device(?:\s|$)/);
+    if (!match || seen.has(match[1])) continue;
+    seen.add(match[1]);
+    serials.push(match[1]);
+  }
+  return serials;
+}
+
+function buildAdbNotificationArgs(title, body, event) {
+  function encode(value, maxLength) {
+    const normalized = String(value == null ? "" : value)
+      .replace(/[\u0000-\u001f\u007f]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    return Buffer.from(Array.from(normalized).slice(0, maxLength).join(""), "utf8").toString(
+      "base64"
+    );
+  }
+
+  const encodedTitle = encode(title, 80);
+  const encodedBody = encode(body, 400);
+  const tag =
+    String(event == null ? "notify" : event)
+      .toLowerCase()
+      .replace(/[^a-z0-9_.-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 32) || "notify";
+  const script =
+    "title=$(printf %s " +
+    encodedTitle +
+    "|base64 -d);body=$(printf %s " +
+    encodedBody +
+    '|base64 -d);cmd notification post -S bigtext -t "$title" vscodexkit-' +
+    tag +
+    ' "$body"';
+  return ["shell", "sh", "-c", script];
+}
+
+const VERSION = "0.8.27";
 const EXTENSION_DIR_PREFIX = "openai.chatgpt-";
 const EXTENSION_JS = path.join("out", "extension.js");
 const WEBVIEW_INDEX = path.join("webview", "index.html");
 const WEBVIEW_UI = path.join("webview", "assets", "codexpatch-ui.js");
 const WEBVIEW_ASSETS_DIR = path.join("webview", "assets");
+const WEBVIEW_APP_MAIN_NEEDLES = [
+  '"interrupt-conversation"',
+  '"thread-follower-interrupt-turn-for-host"',
+  '"retry-safety-buffered-turn-for-host"',
+  "case`thread-follower-start-turn-request`:"
+];
 const BASELINE_DIR = ".codexpatch";
 const BASELINE_ORIGINAL_DIR = path.join(BASELINE_DIR, "original");
 const BASELINE_META = path.join(BASELINE_DIR, "baseline.json");
 
 const MARKERS = {
-  notifyV10: "codexpatch:v17:no-notify-install-decoupled",
+  notifyV10: "codexpatch:v19:adb-device-notify",
   mcpLifecycle: "codexpatch:v1:mcp-lifecycle-conversation-end",
-  appServerRequest: "codexpatch:v1:app-server-request-approval",
-  threadStreamState: "codexpatch:v1:thread-stream-state-conversation-end",
+  appServerRequest: "codexpatch:v2:app-server-request-approval",
+  threadStreamState: "codexpatch:v2:thread-stream-state-conversation-end",
   userInterrupt: "codexpatch:v1:user-interrupt-suppress",
-  webviewUserInterrupt: "codexpatch:v1:webview-user-interrupt",
-  webviewAutoRetry: "codexpatch:v5:webview-auto-retry-message-mode",
-  webviewAutoRetryCommand: "codexpatch:v2:webview-auto-retry-message-command",
+  webviewUserInterrupt: "codexpatch:v2:webview-user-interrupt",
+  webviewAutoRetry: "codexpatch:v6:webview-auto-retry-message-mode",
+  webviewAutoRetryCommand: "codexpatch:v4:webview-auto-retry-message-command",
   hostSettings: "codexpatch:v3:host-settings",
   webviewIndex: "codexpatch:v2:webview-index",
   webviewUi: "codexpatch:v8:webview-ui-diagnostic-lite"
 };
 
-const ORIGINAL_NOTIFICATION_ANCHOR =
-  'e.push(d.registerInternalNotificationHandler(Re=>{Re.method==="turn/completed"&&E.emit("turnComplete")}));';
+const ORIGINAL_NOTIFICATION_PATTERN =
+  /([A-Za-z_$][\w$]*)\.push\(([A-Za-z_$][\w$]*)\.registerInternalNotificationHandler\(([A-Za-z_$][\w$]*)=>\{\3\.method==="turn\/completed"&&([A-Za-z_$][\w$]*)\.emit\("turnComplete"\)\}\)\);/;
 
 const WINDOWS_SYSTEM_NOTIFY_PS = `
 $ErrorActionPreference = 'SilentlyContinue'
@@ -259,11 +312,15 @@ Write-CodexPatchLog ('end shown=' + $script:shown)
 
 
 
-const V10_NOTIFICATION_HANDLER = `e.push((()=>{/* codexpatch:v17:no-notify-install-decoupled */
+const V10_NOTIFICATION_HANDLER = `e.push((()=>{/* ${MARKERS.notifyV10} */
 function cpText(e){return e==null?"":typeof e==="string"?e:typeof e==="number"||typeof e==="boolean"?String(e):""}
 function cpJson(e){try{return JSON.stringify(e,(r,n)=>typeof n==="string"&&n.length>240?n.slice(0,240)+"...":n)}catch(_){return""}}
 function cpMod(){try{return{fs:require("fs"),os:require("os"),path:require("path"),cp:require("child_process")}}catch(_){return null}}
 function cpLog(e,r){try{let n=cpMod();if(!n)return;let o=process.env.CODEXPATCH_LOG_FILE||n.path.join(n.os.tmpdir(),"codexpatch.log"),i=cpJson(r);n.fs.appendFileSync(o,new Date().toISOString()+" [host] "+e+(i?" "+i:"")+"\\n","utf8")}catch(_){}}
+${parseAdbDeviceSerials.toString()}
+${buildAdbNotificationArgs.toString()}
+function cpAdbPath(e){try{let r=globalThis.__codexpatchAdbPath;if(r)return r;let n=process.platform==="win32"?"adb.exe":"adb",o=[process.env.CODEXPATCH_ADB_PATH,process.env.ANDROID_HOME&&e.path.join(process.env.ANDROID_HOME,"platform-tools",n),process.env.ANDROID_SDK_ROOT&&e.path.join(process.env.ANDROID_SDK_ROOT,"platform-tools",n),process.env.LOCALAPPDATA&&e.path.join(process.env.LOCALAPPDATA,"Android","Sdk","platform-tools",n)];for(let n of o)if(n&&e.fs.existsSync(n))return globalThis.__codexpatchAdbPath=n;return globalThis.__codexpatchAdbPath=n}catch(_){return"adb"}}
+function cpNotifyAdb(e,r,n){try{let o=Date.now();if(o<(globalThis.__codexpatchAdbBackoffUntil||0))return;let i=cpMod();if(!i)return;let s=cpAdbPath(i);i.cp.execFile(s,["devices"],{windowsHide:true,timeout:4e3,encoding:"utf8",maxBuffer:65536},(o,a,c)=>{if(o){globalThis.__codexpatchAdbBackoffUntil=Date.now()+6e4;cpLog("adb-notify-list-error",{message:cpErr(o)||String(c||"").slice(0,300)});return}let l=parseAdbDeviceSerials(a);if(!l.length){let e=Date.now(),r=globalThis.__codexpatchAdbNoDevicesLogAt||0;if(e-r>3e5)globalThis.__codexpatchAdbNoDevicesLogAt=e,cpLog("adb-notify-skip-no-devices",{});return}for(let o of l)try{let a=["-s",o,...buildAdbNotificationArgs(e,r,n)],c="",l=i.cp.spawn(s,a,{windowsHide:true,stdio:["ignore","ignore","pipe"]});l.stderr?.on?.("data",e=>{c.length<500&&(c+=String(e).slice(0,500-c.length))});l.on?.("error",e=>cpLog("adb-notify-device-error",{serial:o,message:cpErr(e)}));l.on?.("exit",e=>cpLog(e===0?"adb-notify-device-ok":"adb-notify-device-failed",{serial:o,code:e,stderr:c.slice(0,500)}))}catch(e){cpLog("adb-notify-device-exception",{serial:o,message:cpErr(e)})}})}catch(e){cpLog("adb-notify-exception",{message:cpErr(e)})}}
 function cpErr(e){return e==null?"":typeof e==="string"?e:cpText(e.message)||cpText(e.detail)||cpText(e.additionalDetails)||cpText(e.code)||cpText(e.error)}
 function cpMsg(e){let r=e?.params||{},n=e?.error||r.error||r.turn?.error||r.payload?.error||r.event?.error;return cpErr(n)||cpText(e?.body)||cpText(e?.message)||cpText(r.message)||cpText(r.errorMessage)||cpText(r.reason)||cpText(r.details)}
 function cpConv(e){let r=e?.params||{};return cpText(e?.conversationId)||cpText(e?.threadId)||cpText(r.conversationId)||cpText(r.threadId)||"global"}
@@ -295,9 +352,9 @@ function cpRememberAssistantOutput(e){try{let r=e?.change||e?.params?.change||{}
 function cpHasAssistantOutputForRetry(e){try{if(cpObjHasAssistantOutput(e?.params?.turn)||cpObjHasAssistantOutput(e?.turn))return true;let r=cpConv(e),n=cpTurnId(e),o=cpOutputMap().get(r);if(!o?.hasOutput)return false;if(o.turnPath)return true;if(n&&o.turnId&&n!==o.turnId)return false;return true}catch(_){return false}}
 function cpRetryBlob(e){let r=e?.params||{},n=[e?.source,e?.method,cpStatus(e),cpMsg(e),e?.error?.code,r.error?.code,r.turn?.error?.code,r.reason,r.details,r.errorMessage,cpJson(e?.error),cpJson(e?.change),cpJson(r.change),cpJson(r.error),cpJson(r.turn?.error),cpJson(r.payload?.error),cpJson(r.event?.error)].join(" ");return n.slice(0,12e3).toLowerCase()}
 function cpLooksStreamRetryExhausted(e){let r=cpRetryBlob(e),n=(cpText(e?.source)+" "+cpText(e?.method)).toLowerCase(),o=/stream_error|thread-stream-state/.test(n)||/\\bstream\\b|stream[_ -]?/.test(r),i=cpStatus(e)==="failed"&&/(currently experiencing high demand|temporary errors?|temporarily unavailable|service unavailable|overloaded|too many requests|rate limit|\\b429\\b|\\b502\\b|\\b503\\b|\\b504\\b|gateway timeout|network error|fetch failed|failed to fetch|request failed|error sending request|stream disconnected|connection (?:reset|refused|closed|terminated)|econnreset|etimedout|eai_again|enotfound|timed?\\s*out)/.test(r);if(/stream[_ -]?max[_ -]?retries/.test(r))return true;if(i)return true;if(!o)return false;return /max(?:imum)?\\s+retries|retry limit|retries exhausted|exhausted\\s+retries|too many retries|retry attempts? exhausted|all retries failed|stream disconnected|error sending request/.test(r)}
-function cpRequestAutoRetry(e){try{let r=globalThis.__codexpatchSettings||{};if(r.autoRetry!==true){cpLog("auto-retry-skip-disabled",{conversationId:cpConv(e),status:cpStatus(e),method:e?.method});return false}if(cpLooksUserInterrupted(e)){cpLog("auto-retry-skip-user-interrupt",{conversationId:cpConv(e),status:cpStatus(e),method:e?.method});return false}if(!cpLooksStreamRetryExhausted(e)){cpLog("auto-retry-skip-not-stream-max-retries",{conversationId:cpConv(e),status:cpStatus(e),method:e?.method,msg:cpMsg(e)});return false}let n=cpConv(e),o=cpTurnId(e),i=cpHost(e),s=cpModel(e),a="rollback",c=n+"|"+(o||cpRequestId(e)||cpMsg(e).slice(0,80))+"|"+cpStatus(e)+"|"+(e?.method||"")+"|"+a,l=Date.now(),u=globalThis.__codexpatchAutoRetryLast||(globalThis.__codexpatchAutoRetryLast=new Map),f=u.get(c);if(f&&l-f<3e4){cpLog("auto-retry-skip-duplicate",{key:c,mode:a});return true}for(let[e,r]of u)try{l-r>12e4&&u.delete(e)}catch(_){}let p={type:"codexpatch-auto-retry",hostId:i,conversationId:n,threadId:n,turnId:o,model:s||null,status:cpStatus(e),method:e?.method||"",reason:"stream_max_retries",mode:a,hadTrackedOutput:cpHasAssistantOutputForRetry(e),windowMs:3e4,at:l},h=globalThis.__codexpatchBroadcastToWebview;if(typeof h==="function"){cpLog("auto-retry-arm",p);h(p);u.set(c,l);return true}else cpLog("auto-retry-no-broadcast",p);return false}catch(r){cpLog("auto-retry-exception",{message:r?.message});return false}}
-function cpBody(e,r,n,o){if(o==="approval"||cpApproval(e)||cpAwaitingUserMethod(r)){if(cpAwaitingInputMethod(r))return n||"Codex 需要你回复问题";return n||"Codex 需要你审批操作"}if(e==="completed")return"Codex 任务已完成";let i=r==="codex/event/stream_error"?"Codex 网络错误，任务已停止":r==="codex/event/error"?"Codex 任务发生错误":e==="interrupted"?"Codex 任务已中断":e==="failed"?"Codex 任务失败":"Codex 任务结束: "+(e??"unknown");return n?i+": "+String(n).slice(0,180):i}
-function cpNotify(e){try{let r=globalThis.__codexpatchSettings||{};if(r.notify===false){cpLog("notify-skip-disabled",e);return}let n=cpStatus(e),o=e?.kind||"",i=e?.method||"",s=cpApproval(n)||o==="approval"||cpAwaitingUserMethod(i);if(!s&&!cpFinal(n)){cpLog("notify-skip-not-final",{status:n,kind:o,method:i});return}if(!s&&cpLooksUserInterrupted(e)){cpLog("notify-skip-user-interrupt",{status:n,method:i,msg:cpMsg(e)});return}let a=Date.now(),c=globalThis.__codexpatchNotifyLastByConversation||(globalThis.__codexpatchNotifyLastByConversation=new Map),l=cpConv(e),u=s?"approval":n,d=l+"|"+u+"|"+i+"|"+cpRequestId(e),f=c.get(d);if(f&&a-f<1e4){cpLog("notify-skip-duplicate",{key:d,status:n,kind:o});return}for(let[e,r]of c)try{a-r>12e4&&c.delete(e)}catch(_){}c.set(d,a);let p=cpMsg(e),h=s?"Codex 需要处理":"Codex",g=cpBody(n,i,p,o),m=s||n!=="completed";cpLog("notify-send",{conversationId:l,status:n,kind:o,method:i,body:g});if(process.platform==="win32")try{let e=${JSON.stringify(WINDOWS_SYSTEM_NOTIFY_PS_V8)},r=cpMod(),o=r.path.join(r.os.tmpdir(),"codexpatch-notify.ps1");try{r.fs.writeFileSync(o,e,"utf8");cpLog("notify-script-written",{path:o,bytes:e.length})}catch(e){cpLog("notify-script-write-failed",{message:e?.message})}let n=r.cp.spawn("powershell.exe",["-NoProfile","-ExecutionPolicy","Bypass","-Sta","-File",o],{windowsHide:true,detached:false,stdio:["ignore","ignore","pipe"],env:{...process.env,CODEXPATCH_TITLE:h,CODEXPATCH_BODY:g,CODEXPATCH_ICON:m?"Warning":"Info",CODEXPATCH_EVENT:u,CODEXPATCH_AUMID:"vscodexkit.VSCode",CODEXPATCH_LOG_FILE:process.env.CODEXPATCH_LOG_FILE||r.path.join(r.os.tmpdir(),"codexpatch.log"),CODEXPATCH_SHORTCUT_TARGET:process.execPath,CODEXPATCH_SHORTCUT_ICON:process.execPath}});cpLog("notify-spawned",{pid:n.pid,event:u,file:o});n.stderr?.on?.("data",e=>cpLog("notify-stderr",{message:String(e).slice(0,500)}));n.on?.("exit",(e,r)=>cpLog("notify-exit",{code:e,signal:r,event:u}));n.on?.("error",e=>cpLog("notify-spawn-error",{message:e?.message}));return}catch(e){cpLog("notify-spawn-exception",{message:e?.message})}m?ut.window.showWarningMessage(g):ut.window.showInformationMessage(g)}catch(e){cpLog("notify-exception",{message:e?.message})}}
+function cpRequestAutoRetry(e){try{let r=globalThis.__codexpatchSettings||{};if(r.autoRetry!==true){cpLog("auto-retry-skip-disabled",{conversationId:cpConv(e),status:cpStatus(e),method:e?.method});return false}if(cpLooksUserInterrupted(e)){cpLog("auto-retry-skip-user-interrupt",{conversationId:cpConv(e),status:cpStatus(e),method:e?.method});return false}if(!cpLooksStreamRetryExhausted(e)){cpLog("auto-retry-skip-not-stream-max-retries",{conversationId:cpConv(e),status:cpStatus(e),method:e?.method,msg:cpMsg(e)});return false}let n=cpConv(e),o=cpTurnId(e)||cpOutputMap().get(n)?.turnId||"",i=cpHost(e),s=cpModel(e),a="rollback",c=n+"|"+(o||cpRequestId(e)||cpMsg(e).slice(0,80))+"|"+cpStatus(e)+"|"+(e?.method||"")+"|"+a,l=Date.now(),u=globalThis.__codexpatchAutoRetryLast||(globalThis.__codexpatchAutoRetryLast=new Map),f=u.get(c);if(f&&l-f<3e4){cpLog("auto-retry-skip-duplicate",{key:c,mode:a});return true}for(let[e,r]of u)try{l-r>12e4&&u.delete(e)}catch(_){}let p={type:"codexpatch-auto-retry",hostId:i,conversationId:n,threadId:n,turnId:o,model:s||null,status:cpStatus(e),method:e?.method||"",reason:"stream_max_retries",mode:a,hadTrackedOutput:cpHasAssistantOutputForRetry(e),windowMs:3e4,at:l},h=globalThis.__codexpatchBroadcastToWebview;if(typeof h==="function"){cpLog("auto-retry-arm",p);h(p);u.set(c,l);cpNotify({source:"auto-retry",method:"codexpatch/auto-retry",conversationId:n,threadId:n,turnId:o,status:"retrying",kind:"retry",message:"Codex 正在自动重试",params:p});return true}else cpLog("auto-retry-no-broadcast",p);return false}catch(r){cpLog("auto-retry-exception",{message:r?.message});return false}}
+function cpBody(e,r,n,o){if(o==="retry")return n||"Codex 正在自动重试";if(o==="approval"||cpApproval(e)||cpAwaitingUserMethod(r)){if(cpAwaitingInputMethod(r))return n||"Codex 需要你回复问题";return n||"Codex 需要你审批操作"}if(e==="completed")return"Codex 任务已完成";let i=r==="codex/event/stream_error"?"Codex 网络错误，任务已停止":r==="codex/event/error"?"Codex 任务发生错误":e==="interrupted"?"Codex 任务已中断":e==="failed"?"Codex 任务失败":"Codex 任务结束: "+(e??"unknown");return n?i+": "+String(n).slice(0,180):i}
+function cpNotify(e){try{let r=globalThis.__codexpatchSettings||{};if(r.notify===false){cpLog("notify-skip-disabled",e);return}let n=cpStatus(e),o=e?.kind||"",i=e?.method||"",s=cpApproval(n)||o==="approval"||cpAwaitingUserMethod(i),v=o==="retry";if(!s&&!v&&!cpFinal(n)){cpLog("notify-skip-not-final",{status:n,kind:o,method:i});return}if(!s&&!v&&cpLooksUserInterrupted(e)){cpLog("notify-skip-user-interrupt",{status:n,method:i,msg:cpMsg(e)});return}let a=Date.now(),c=globalThis.__codexpatchNotifyLastByConversation||(globalThis.__codexpatchNotifyLastByConversation=new Map),l=cpConv(e),u=s?"approval":v?"retry":n,d=l+"|"+u+"|"+i+"|"+cpRequestId(e),f=c.get(d);if(f&&a-f<1e4){cpLog("notify-skip-duplicate",{key:d,status:n,kind:o});return}for(let[e,r]of c)try{a-r>12e4&&c.delete(e)}catch(_){}c.set(d,a);let p=cpMsg(e),h=s?"Codex 需要处理":"Codex",g=cpBody(n,i,p,o),m=s||n!=="completed";cpLog("notify-send",{conversationId:l,status:n,kind:o,method:i,body:g});cpNotifyAdb(h,g,u);if(process.platform==="win32")try{let e=${JSON.stringify(WINDOWS_SYSTEM_NOTIFY_PS_V8)},r=cpMod(),o=r.path.join(r.os.tmpdir(),"codexpatch-notify.ps1");try{r.fs.writeFileSync(o,e,"utf8");cpLog("notify-script-written",{path:o,bytes:e.length})}catch(e){cpLog("notify-script-write-failed",{message:e?.message})}let n=r.cp.spawn("powershell.exe",["-NoProfile","-ExecutionPolicy","Bypass","-Sta","-File",o],{windowsHide:true,detached:false,stdio:["ignore","ignore","pipe"],env:{...process.env,CODEXPATCH_TITLE:h,CODEXPATCH_BODY:g,CODEXPATCH_ICON:m?"Warning":"Info",CODEXPATCH_EVENT:u,CODEXPATCH_AUMID:"vscodexkit.VSCode",CODEXPATCH_LOG_FILE:process.env.CODEXPATCH_LOG_FILE||r.path.join(r.os.tmpdir(),"codexpatch.log"),CODEXPATCH_SHORTCUT_TARGET:process.execPath,CODEXPATCH_SHORTCUT_ICON:process.execPath}});cpLog("notify-spawned",{pid:n.pid,event:u,file:o});n.stderr?.on?.("data",e=>cpLog("notify-stderr",{message:String(e).slice(0,500)}));n.on?.("exit",(e,r)=>cpLog("notify-exit",{code:e,signal:r,event:u}));n.on?.("error",e=>cpLog("notify-spawn-error",{message:e?.message}));return}catch(e){cpLog("notify-spawn-exception",{message:e?.message})}m?ut.window.showWarningMessage(g):ut.window.showInformationMessage(g)}catch(e){cpLog("notify-exception",{message:e?.message})}}
 function cpStart(e){try{let r=cpConv(typeof e==="string"?{conversationId:e}:e);(globalThis.__codexpatchActiveConversations||(globalThis.__codexpatchActiveConversations=new Set)).add(r);if(typeof e==="string")try{cpOutputMap().delete(r)}catch(_){}cpLog("conversation-start",{conversationId:r,source:e?.source,method:e?.method})}catch(_){}}
 function cpHandle(e){try{let r=cpStatus(e),n=e?.method||"";cpLog("observe",{source:e?.source,method:n,status:r,conversationId:cpConv(e),kind:e?.kind});if(r==="inProgress"){cpStart(e);return}if(cpFinal(r)&&!cpAuthoritativeEnd(e)){cpLog("notify-skip-nonauthoritative-final",{source:e?.source,method:n,status:r,conversationId:cpConv(e)});return}let o=false;if(r==="failed"||n==="codex/event/stream_error"||n==="codex/event/error")o=cpRequestAutoRetry(e);if(o){cpLog("notify-skip-auto-retry",{conversationId:cpConv(e),status:r,method:n,msg:cpMsg(e)});return}if(cpFinal(r)||cpApproval(r)||e?.kind==="approval"||cpAwaitingUserMethod(n))cpNotify(e)}catch(n){cpLog("handle-exception",{message:n?.message})}}
 function cpPath(e){return Array.isArray(e)?e.map(cpText):typeof e==="string"?e.split(/[./]/):[]}
@@ -323,17 +380,10 @@ const MCP_LIFECYCLE_ANCHOR =
 const MCP_LIFECYCLE_PATCH =
   'handleMcpNotification(e){let r=this.extractConversationId(e.params);switch(e.method){case"codex/event/exec_approval_request":case"codex/event/apply_patch_approval_request":globalThis.__codexpatchNotifyConversationEnd?.({source:"mcp",method:e.method,conversationId:r||"global",status:"approval_needed",kind:"approval",params:e.params});break;case"codex/event/request_user_input":case"codex/event/elicitation_request":case"codex/event/dynamic_tool_call_request":globalThis.__codexpatchNotifyConversationEnd?.({source:"mcp",method:e.method,conversationId:r||"global",status:"input_needed",kind:"approval",params:e.params});break;case"codex/event/task_started":if(r)this.updateConversationStatus(r,2),globalThis.__codexpatchNotifyConversationStart?.(r);break;case"codex/event/task_complete":if(r)this.updateConversationStatus(r,1),globalThis.__codexpatchNotifyConversationEnd?.({source:"mcp",method:e.method,conversationId:r,status:"completed",params:e.params});break;case"codex/event/turn_aborted":if(r)globalThis.__codexpatchNotifyConversationEnd?.({source:"mcp",method:e.method,conversationId:r,status:"interrupted",params:e.params}),this.updateConversationStatus(r,0);break;case"codex/event/error":case"codex/event/stream_error":if(r)globalThis.__codexpatchNotifyConversationEnd?.({source:"mcp",method:e.method,conversationId:r,status:"failed",params:e.params}),this.updateConversationStatus(r,0);break;default:break}}/* codexpatch:v1:mcp-lifecycle-conversation-end */';
 
-const APP_SERVER_REQUEST_ANCHOR =
-  'onRequest:T=>{this.broadcastToAllViews({type:"mcp-request",hostId:"local",request:T})}';
+const APP_SERVER_REQUEST_PATTERN =
+  /onRequest:([A-Za-z_$][\w$]*)=>\{this\.broadcastToAllViews\(\{type:"mcp-request",hostId:"local",request:\1\}\)\}/;
 
-const APP_SERVER_REQUEST_PATCH =
-  'onRequest:T=>{try{globalThis.__codexpatchBroadcastToWebview=O=>{try{this.broadcastToAllViews(O)}catch(e){globalThis.__codexpatchLog?.("broadcast-exception",{message:e?.message})}};globalThis.__codexpatchObserveAppServerRequest?.(T)}catch(_){}this.broadcastToAllViews({type:"mcp-request",hostId:"local",request:T})}/* codexpatch:v1:app-server-request-approval */';
-
-const THREAD_STREAM_STATE_ANCHOR =
-  'case"thread-stream-state-changed":{let n=this.getIpcClientForWebview(e);if(!n)throw new Error("Missing IPC client for webview");await n.sendBroadcast("thread-stream-state-changed",r);break}';
-
-const THREAD_STREAM_STATE_PATCH =
-  'case"thread-stream-state-changed":{/* codexpatch:v1:thread-stream-state-conversation-end */try{globalThis.__codexpatchBroadcastToWebview=O=>{try{this.broadcastToAllViews(O)}catch(e){globalThis.__codexpatchLog?.("broadcast-exception",{message:e?.message})}};globalThis.__codexpatchObserveThreadStreamState?.(r)}catch(_){}let n=this.getIpcClientForWebview(e);if(!n)throw new Error("Missing IPC client for webview");await n.sendBroadcast("thread-stream-state-changed",r);break}';
+const THREAD_STREAM_STATE_PATTERN = /case"thread-stream-state-changed":\{/;
 
 const USER_INTERRUPT_ANCHOR =
   'c=r.addRequestHandler("thread-follower-interrupt-turn",async x=>await this.getThreadRole(e,x.conversationId)==="owner",async x=>this.handleThreadFollowerInterruptTurnRequest(e,x.requestId,x.params)),';
@@ -570,12 +620,20 @@ function buildInitialSettings(options) {
   };
 }
 
-function buildNotificationHandler(options) {
+function buildNotificationHandler(options, identifiers) {
   const settings = JSON.stringify(buildInitialSettings(options));
-  return V10_NOTIFICATION_HANDLER.replace(
+  const handler = V10_NOTIFICATION_HANDLER.replace(
     "function cpText(e){",
     `globalThis.__codexpatchSettings=${settings};\nfunction cpText(e){`
   );
+  if (!identifiers) return handler;
+  const { subscriptions, connection, notification, eventEmitter } = identifiers;
+  return handler
+    .replace("e.push((()=>{", `${subscriptions}.push((()=>{`)
+    .replace(
+      'return d.registerInternalNotificationHandler(Re=>{if(Re.method==="turn/completed"){E.emit("turnComplete");try{let e=Re.params||{},r=e.turn||{};cpHandle({source:"turn-completed",method:Re.method,conversationId:e.threadId,threadId:e.threadId,turnId:r.id,status:r.status,error:r.error,params:e})}catch(e){cpLog("turn-completed-exception",{message:e?.message})}}});',
+      `return ${connection}.registerInternalNotificationHandler(${notification}=>{if(${notification}.method==="turn/completed"){${eventEmitter}.emit("turnComplete");try{let e=${notification}.params||{},r=e.turn||{};cpHandle({source:"turn-completed",method:${notification}.method,conversationId:e.threadId,threadId:e.threadId,turnId:r.id,status:r.status,error:r.error,params:e})}catch(e){cpLog("turn-completed-exception",{message:e?.message})}}});`
+    );
 }
 
 function buildWebviewUiSourceLite(options) {
@@ -587,29 +645,127 @@ function buildWebviewUiSourceLite(options) {
   );
 }
 
-const APP_MAIN_INTERRUPT_ANCHOR =
-  '"interrupt-conversation":mM(async(e,{conversationId:t,initiatedBy:n},r)=>{let i=await e.interruptConversation(t);n===`user`&&i!=null&&r.markTurnInterruptedByThisClient(t,i)})';
+const APP_MAIN_INTERRUPT_PATTERN =
+  /"interrupt-conversation":([A-Za-z_$][\w$]*)\(async\(([A-Za-z_$][\w$]*),\{conversationId:([A-Za-z_$][\w$]*),initiatedBy:([A-Za-z_$][\w$]*)\},([A-Za-z_$][\w$]*)\)=>\{let ([A-Za-z_$][\w$]*)=await \2\.interruptConversation\(\3\);\4===`user`&&\6!=null&&\5\.markTurnInterruptedByThisClient\(\3,\6\)\}\)/;
 
-const APP_MAIN_INTERRUPT_PATCH =
-  '"interrupt-conversation":mM(async(e,{conversationId:t,initiatedBy:n},r)=>{n===`user`&&globalThis.__codexpatchPostUserInterrupt?.({conversationId:t,method:"interrupt-conversation",initiatedBy:n});let i=await e.interruptConversation(t);n===`user`&&i!=null&&(globalThis.__codexpatchPostUserInterrupt?.({conversationId:t,turnId:i,method:"interrupt-conversation",initiatedBy:n}),r.markTurnInterruptedByThisClient(t,i))})/* codexpatch:v1:webview-user-interrupt */';
+const APP_MAIN_FOLLOWER_INTERRUPT_PATTERN =
+  /"thread-follower-interrupt-turn-for-host":([A-Za-z_$][\w$]*)\(async\(([A-Za-z_$][\w$]*),([A-Za-z_$][\w$]*)\)=>\(\2\.assertThreadFollowerOwner\(\3\.conversationId\),\{interruptedTurnId:await \2\.interruptConversation\(\3\.conversationId\),ok:!0\}\)\)/;
 
-const APP_MAIN_FOLLOWER_INTERRUPT_ANCHOR =
-  '"thread-follower-interrupt-turn-for-host":$(async(e,t)=>(e.assertThreadFollowerOwner(t.conversationId),{interruptedTurnId:await e.interruptConversation(t.conversationId),ok:!0}))';
+const APP_MAIN_AUTO_RETRY_PATTERN =
+  /(case`ipc-broadcast`:(?<event>[A-Za-z_$][\w$]*)\.method===`automation-capability-event`&&\k<event>\.sourceClientId===`desktop`&&\k<event>\.version===[A-Za-z_$][\w$]*\(`automation-capability-event`\)&&[A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*,[A-Za-z_$][\w$]*\.getForHostId\(\k<event>\.params\.hostId\),\k<event>\.params\),[A-Za-z_$][\w$]*\(\{claimAppConnectOAuthCallback:[A-Za-z_$][\w$]*,isCompactWindow:[A-Za-z_$][\w$]*,message:\k<event>,navigate:[A-Za-z_$][\w$]*,queryClient:[A-Za-z_$][\w$]*\}\);break (?<label>bb\d+);)(case`thread-follower-start-turn-request`:try\{let (?<result>[A-Za-z_$][\w$]*)=await (?<request>[A-Za-z_$][\w$]*)\(`thread-follower-start-turn-for-host`,\{hostId:\k<event>\.hostId,\.\.\.\k<event>\.params\}\);(?<dispatch>[A-Za-z_$][\w$]*)\.dispatchMessage\(`thread-follower-start-turn-response`,\{requestId:\k<event>\.requestId,result:\k<result>\}\))/;
 
-const APP_MAIN_FOLLOWER_INTERRUPT_PATCH =
-  '"thread-follower-interrupt-turn-for-host":$(async(e,t)=>(e.assertThreadFollowerOwner(t.conversationId),globalThis.__codexpatchPostUserInterrupt?.({conversationId:t.conversationId,requestId:t.requestId,method:"thread-follower-interrupt-turn-for-host"}),{interruptedTurnId:await e.interruptConversation(t.conversationId),ok:!0}))/* codexpatch:v1:webview-user-interrupt */';
+function patchNotificationRegistration(source, options) {
+  return replaceExactlyOnceByPattern(
+    source,
+    ORIGINAL_NOTIFICATION_PATTERN,
+    (match) =>
+      buildNotificationHandler(options, {
+        subscriptions: match[1],
+        connection: match[2],
+        notification: match[3],
+        eventEmitter: match[4]
+      }),
+    "notification registration anchor in clean baseline"
+  );
+}
 
-const APP_MAIN_CODEXPATCH_RETRY_COMMAND_ANCHOR =
-  '"retry-safety-buffered-turn-for-host":$(async(e,{conversationId:t,turnId:n,model:r})=>{';
+function patchAppServerRequest(source) {
+  return replaceExactlyOnceByPattern(
+    source,
+    APP_SERVER_REQUEST_PATTERN,
+    (match) => {
+      const request = match[1];
+      return `onRequest:${request}=>{try{globalThis.__codexpatchBroadcastToWebview=O=>{try{this.broadcastToAllViews(O)}catch(e){globalThis.__codexpatchLog?.("broadcast-exception",{message:e?.message})}};globalThis.__codexpatchObserveAppServerRequest?.(${request})}catch(_){}this.broadcastToAllViews({type:"mcp-request",hostId:"local",request:${request}})}/* ${MARKERS.appServerRequest} */`;
+    },
+    "app server request anchor in clean baseline"
+  );
+}
 
-const APP_MAIN_CODEXPATCH_RETRY_COMMAND_PATCH =
-  '"codexpatch-retry-turn-for-host":$(async(e,{conversationId:t,turnId:n,model:r})=>{let i=un(e.getConversation(t),n);if(i==null)throw Error(`Turn not found.`);if(i.status===`inProgress`&&await e.interruptConversation(t)!==i.turnId)throw Error(`The turn is no longer active.`);let a=e.getConversation(t);if(a==null)throw Error(`Conversation state not found.`);gM(e,{conversationId:t,conversationState:a,rollbackResponse:await e.sendRequest(`thread/rollback`,{threadId:t,numTurns:1})});let o=(0,fM.default)(i.params,[`clientUserMessageId`,`threadId`]),s=r??i.params?.model??o.model??a.latestModel??null;await hi(e,t,{...o,model:s,inheritThreadSettings:!1})}),"codexpatch-send-retry-message-for-host":$(async(e,{conversationId:t,turnId:n,model:r,text:i})=>{/* codexpatch:v2:webview-auto-retry-message-command */let a=e.getConversation(t);if(a==null)throw Error(`Conversation state not found.`);let o=n?un(a,n):null;if(n&&o==null)throw Error(`Turn not found.`);if(o?.status===`inProgress`&&await e.interruptConversation(t)!==o.turnId)throw Error(`The turn is no longer active.`);let s=o?.params?(0,fM.default)(o.params,[`clientUserMessageId`,`threadId`,`input`,`attachments`,`commentAttachments`]):{},c=r??o?.params?.model??s.model??a.latestModel??null,l=typeof i===`string`&&i.trim()?i:`retry`;await hi(e,t,{...s,input:[{type:`text`,text:l,text_elements:[]}],model:c,inheritThreadSettings:!1})}),"retry-safety-buffered-turn-for-host":$(async(e,{conversationId:t,turnId:n,model:r})=>{';
+function patchThreadStreamState(source) {
+  return replaceExactlyOnceByPattern(
+    source,
+    THREAD_STREAM_STATE_PATTERN,
+    () =>
+      `case"thread-stream-state-changed":{/* ${MARKERS.threadStreamState} */try{globalThis.__codexpatchBroadcastToWebview=O=>{try{this.broadcastToAllViews(O)}catch(e){globalThis.__codexpatchLog?.("broadcast-exception",{message:e?.message})}};globalThis.__codexpatchObserveThreadStreamState?.(r)}catch(_){}`,
+    "thread stream state anchor in clean baseline"
+  );
+}
 
-const APP_MAIN_AUTO_RETRY_ANCHOR =
-  'case`ipc-broadcast`:e.method===`automation-capability-event`&&e.sourceClientId===`desktop`&&e.version===ze(`automation-capability-event`)&&QO(r,i.getForHostId(e.params.hostId),e.params),uk({claimAppConnectOAuthCallback:p,isCompactWindow:d,message:e,navigate:a,queryClient:c});break bb35;case`thread-follower-start-turn-request`:';
+function patchAppMainInterrupt(source) {
+  return replaceExactlyOnceByPattern(
+    source,
+    APP_MAIN_INTERRUPT_PATTERN,
+    (match) => {
+      const [, wrapper, manager, conversationId, initiatedBy, context, interruptedTurnId] = match;
+      return `"interrupt-conversation":${wrapper}(async(${manager},{conversationId:${conversationId},initiatedBy:${initiatedBy}},${context})=>{${initiatedBy}===\`user\`&&globalThis.__codexpatchPostUserInterrupt?.({conversationId:${conversationId},method:"interrupt-conversation",initiatedBy:${initiatedBy}});let ${interruptedTurnId}=await ${manager}.interruptConversation(${conversationId});${initiatedBy}===\`user\`&&${interruptedTurnId}!=null&&(globalThis.__codexpatchPostUserInterrupt?.({conversationId:${conversationId},turnId:${interruptedTurnId},method:"interrupt-conversation",initiatedBy:${initiatedBy}}),${context}.markTurnInterruptedByThisClient(${conversationId},${interruptedTurnId}))})/* ${MARKERS.webviewUserInterrupt} */`;
+    },
+    "webview interrupt-conversation anchor in clean baseline"
+  );
+}
 
-const APP_MAIN_AUTO_RETRY_PATCH =
-  'case`codexpatch-auto-retry`:{/* codexpatch:v5:webview-auto-retry-message-mode */try{let t=e.conversationId??e.threadId,n=t?(e.turnId||r.get(Nr,t)?.turnId):e.turnId,o=t?(e.model??r.get(Nr,t)?.params?.model??null):e.model,i=e.allowMessageRetry===!0&&(e.mode===`message`||e.retryMode===`message`);if(!t||!i&&!n){B.dispatchMessage(`codexpatch-diagnostic`,{event:`auto-retry-send-skip-missing-context`,conversationId:t||``,turnId:n||``,mode:i?`message`:`rollback`});break bb35}let s=globalThis.__codexpatchRetrySent||(globalThis.__codexpatchRetrySent=new Map),c=t+`|`+(n||`latest`)+`|`+(i?`message`:`rollback`),l=Date.now(),u=s.get(c);if(u&&l-u<3e4){B.dispatchMessage(`codexpatch-diagnostic`,{event:`auto-retry-send-skip-duplicate`,conversationId:t,turnId:n,mode:i?`message`:`rollback`});break bb35}for(let[e,t]of s)try{l-t>12e4&&s.delete(e)}catch{}s.set(c,l);try{let r=`codexpatch:auto-retry:`+c,a=localStorage.getItem(r),d=a?Number(a.split(`:`)[0]):0;if(d&&l-d<3e4){B.dispatchMessage(`codexpatch-diagnostic`,{event:`auto-retry-send-skip-shared-duplicate`,conversationId:t,turnId:n,mode:i?`message`:`rollback`});break bb35}let f=l+`:`+Math.random().toString(36).slice(2);localStorage.setItem(r,f);await new Promise(e=>setTimeout(e,30));if(localStorage.getItem(r)!==f){B.dispatchMessage(`codexpatch-diagnostic`,{event:`auto-retry-send-skip-shared-lost`,conversationId:t,turnId:n,mode:i?`message`:`rollback`});break bb35}}catch{}let f=i?`codexpatch-send-retry-message-for-host`:`codexpatch-retry-turn-for-host`;B.dispatchMessage(`codexpatch-diagnostic`,{event:i?`auto-retry-message-send`:`auto-retry-send`,conversationId:t,turnId:n,model:o||``});await W(f,{hostId:e.hostId??zr,conversationId:t,turnId:n,model:o,text:e.retryText??`retry`});B.dispatchMessage(`codexpatch-diagnostic`,{event:i?`auto-retry-message-send-ok`:`auto-retry-send-ok`,conversationId:t,turnId:n})}catch(t){B.dispatchMessage(`codexpatch-diagnostic`,{event:`auto-retry-send-error`,conversationId:e.conversationId||e.threadId||``,message:String(t).slice(0,500)})}break bb35}case`ipc-broadcast`:e.method===`automation-capability-event`&&e.sourceClientId===`desktop`&&e.version===ze(`automation-capability-event`)&&QO(r,i.getForHostId(e.params.hostId),e.params),uk({claimAppConnectOAuthCallback:p,isCompactWindow:d,message:e,navigate:a,queryClient:c});break bb35;case`thread-follower-start-turn-request`:';
+function patchAppMainFollowerInterrupt(source) {
+  return replaceExactlyOnceByPattern(
+    source,
+    APP_MAIN_FOLLOWER_INTERRUPT_PATTERN,
+    (match) => {
+      const [, wrapper, manager, request] = match;
+      return `"thread-follower-interrupt-turn-for-host":${wrapper}(async(${manager},${request})=>(${manager}.assertThreadFollowerOwner(${request}.conversationId),globalThis.__codexpatchPostUserInterrupt?.({conversationId:${request}.conversationId,requestId:${request}.requestId,method:"thread-follower-interrupt-turn-for-host"}),{interruptedTurnId:await ${manager}.interruptConversation(${request}.conversationId),ok:!0}))/* ${MARKERS.webviewUserInterrupt} */`;
+    },
+    "webview follower interrupt anchor in clean baseline"
+  );
+}
+
+function patchAppMainRetryCommands(source, plan) {
+  if (!plan || plan.state !== "FOUND") {
+    throw new Error("Webview retry commands require a resolved symbol plan.");
+  }
+  if (
+    !Number.isInteger(plan.handlerKeyOffset) ||
+    !plan.offsets ||
+    !Number.isInteger(plan.offsets.bodyEnd) ||
+    !source.startsWith(plan.handlerKey, plan.handlerKeyOffset)
+  ) {
+    throw new Error("Webview retry symbol plan does not match the bundle.");
+  }
+  const handlerSource = source.slice(plan.handlerKeyOffset, plan.offsets.bodyEnd + 1);
+  if (sha256(handlerSource) !== plan.evidenceHash) {
+    throw new Error("Webview retry symbol evidence changed before patch installation.");
+  }
+  const patch =
+    '"codexpatch-retry-turn-for-host":CP_WRAPPER(async(e,{conversationId:t,turnId:n,model:r})=>{let i=CP_LOOKUP(e.getConversation(t),n);if(i==null)throw Error(`Turn not found.`);if(i.status===`inProgress`&&await e.interruptConversation(t)!==i.turnId)throw Error(`The turn is no longer active.`);let a=e.getConversation(t);if(a==null)throw Error(`Conversation state not found.`);CP_ROLLBACK(e,{conversationId:t,conversationState:a,rollbackResponse:await e.sendRequest(`thread/rollback`,{threadId:t,numTurns:1})});let o=(0,CP_OMIT.default)(i.params,[`clientUserMessageId`,`threadId`]),s=r??i.params?.model??o.model??a.latestModel??null;await CP_START(e,t,{...o,model:s,inheritThreadSettings:!1})}),"codexpatch-send-retry-message-for-host":CP_WRAPPER(async(e,{conversationId:t,turnId:n,model:r,text:i})=>{/* CP_MARKER */let a=e.getConversation(t);if(a==null)throw Error(`Conversation state not found.`);let o=n?CP_LOOKUP(a,n):null;if(n&&o==null)throw Error(`Turn not found.`);if(o?.status===`inProgress`&&await e.interruptConversation(t)!==o.turnId)throw Error(`The turn is no longer active.`);let s=o?.params?(0,CP_OMIT.default)(o.params,[`clientUserMessageId`,`threadId`,`input`,`attachments`,`commentAttachments`]):{},c=r??o?.params?.model??s.model??a.latestModel??null,l=typeof i===`string`&&i.trim()?i:`retry`;await CP_START(e,t,{...s,input:[{type:`text`,text:l,text_elements:[]}],model:c,inheritThreadSettings:!1})}),';
+  const replacement = patch
+    .replaceAll("CP_WRAPPER", plan.commandWrapper)
+    .replaceAll("CP_LOOKUP", plan.turnLookup)
+    .replaceAll("CP_ROLLBACK", plan.applyRollback)
+    .replaceAll("CP_OMIT", plan.omitModule)
+    .replaceAll("CP_START", plan.startTurn)
+    .replaceAll("CP_MARKER", MARKERS.webviewAutoRetryCommand);
+  return (
+    source.slice(0, plan.handlerKeyOffset) +
+    replacement +
+    source.slice(plan.handlerKeyOffset)
+  );
+}
+
+function patchAppMainAutoRetry(source) {
+  return replaceExactlyOnceByPattern(
+    source,
+    APP_MAIN_AUTO_RETRY_PATTERN,
+    (match) => {
+      const { event, label, request, dispatch } = match.groups;
+      const patch =
+        'case`codexpatch-auto-retry`:{/* codexpatch:v6:webview-auto-retry-message-mode */try{let t=CP_EVENT.conversationId??CP_EVENT.threadId,n=CP_EVENT.turnId,o=CP_EVENT.model??null,i=CP_EVENT.allowMessageRetry===!0&&(CP_EVENT.mode===`message`||CP_EVENT.retryMode===`message`);if(!t||!i&&!n){CP_DISPATCH.dispatchMessage(`codexpatch-diagnostic`,{event:`auto-retry-send-skip-missing-context`,conversationId:t||``,turnId:n||``,mode:i?`message`:`rollback`});break CP_LABEL}let s=globalThis.__codexpatchRetrySent||(globalThis.__codexpatchRetrySent=new Map),c=t+`|`+(n||`latest`)+`|`+(i?`message`:`rollback`),l=Date.now(),u=s.get(c);if(u&&l-u<3e4){CP_DISPATCH.dispatchMessage(`codexpatch-diagnostic`,{event:`auto-retry-send-skip-duplicate`,conversationId:t,turnId:n,mode:i?`message`:`rollback`});break CP_LABEL}for(let[e,t]of s)try{l-t>12e4&&s.delete(e)}catch{}s.set(c,l);try{let r=`codexpatch:auto-retry:`+c,a=localStorage.getItem(r),d=a?Number(a.split(`:`)[0]):0;if(d&&l-d<3e4){CP_DISPATCH.dispatchMessage(`codexpatch-diagnostic`,{event:`auto-retry-send-skip-shared-duplicate`,conversationId:t,turnId:n,mode:i?`message`:`rollback`});break CP_LABEL}let f=l+`:`+Math.random().toString(36).slice(2);localStorage.setItem(r,f);await new Promise(e=>setTimeout(e,30));if(localStorage.getItem(r)!==f){CP_DISPATCH.dispatchMessage(`codexpatch-diagnostic`,{event:`auto-retry-send-skip-shared-lost`,conversationId:t,turnId:n,mode:i?`message`:`rollback`});break CP_LABEL}}catch{}let f=i?`codexpatch-send-retry-message-for-host`:`codexpatch-retry-turn-for-host`;CP_DISPATCH.dispatchMessage(`codexpatch-diagnostic`,{event:i?`auto-retry-message-send`:`auto-retry-send`,conversationId:t,turnId:n,model:o||``});await CP_REQUEST(f,{hostId:CP_EVENT.hostId??`local`,conversationId:t,turnId:n,model:o,text:CP_EVENT.retryText??`retry`});CP_DISPATCH.dispatchMessage(`codexpatch-diagnostic`,{event:i?`auto-retry-message-send-ok`:`auto-retry-send-ok`,conversationId:t,turnId:n})}catch(t){CP_DISPATCH.dispatchMessage(`codexpatch-diagnostic`,{event:`auto-retry-send-error`,conversationId:CP_EVENT.conversationId||CP_EVENT.threadId||``,message:String(t).slice(0,500)})}break CP_LABEL}';
+      return (
+        patch
+          .replaceAll("CP_EVENT", event)
+          .replaceAll("CP_LABEL", label)
+          .replaceAll("CP_DISPATCH", dispatch)
+          .replaceAll("CP_REQUEST", request) + match[0]
+      );
+    },
+    "webview auto retry message anchor in clean baseline"
+  );
+}
 
 function main() {
   const { command, options } = parseArgs(process.argv.slice(2));
@@ -732,6 +888,7 @@ Notes:
   - Only the VSCode extension install directory is patched.
   - --notify/--no-notify only controls the install success notification.
   - Runtime Codex notifications default to --runtime-notify; auto retry defaults to --auto-retry.
+  - Runtime notifications are also sent to every adb device whose state is device.
   - A single clean baseline is kept under .codexpatch/original.
   - VSCode user data, globalStorage, workspaceStorage, and project files are not touched.
   - uninstall restores the clean baseline and removes vscodexkit state.
@@ -740,29 +897,85 @@ Notes:
 }
 
 function runNotificationTest() {
-  if (process.platform !== "win32") {
-    console.log("System notification test is Windows-only.");
+  const title = "vscodexkit 测试";
+  const body = "如果看到这条，通知通道可用。";
+  if (process.platform === "win32") {
+    const shortcutTarget = findVsCodeExecutable() || process.execPath;
+    childProcess.execFileSync(
+      "powershell.exe",
+      ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Sta", "-Command", WINDOWS_SYSTEM_NOTIFY_PS_V7],
+      {
+        stdio: "inherit",
+        windowsHide: true,
+        env: {
+          ...process.env,
+          CODEXPATCH_TITLE: title,
+          CODEXPATCH_BODY: body,
+          CODEXPATCH_ICON: "Info",
+          CODEXPATCH_AUMID: "vscodexkit.VSCode",
+          CODEXPATCH_SHORTCUT_TARGET: shortcutTarget,
+          CODEXPATCH_SHORTCUT_ICON: shortcutTarget
+        }
+      }
+    );
+    console.log("Windows notification test finished.");
+  } else {
+    console.log("Windows notification test skipped on this platform.");
+  }
+  runAdbNotificationTest(title, body, "test");
+}
+
+function runAdbNotificationTest(title, body, event) {
+  const adb = findAdbExecutable();
+  let output;
+  try {
+    output = childProcess.execFileSync(adb, ["devices"], {
+      encoding: "utf8",
+      timeout: 4000,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+  } catch (error) {
+    console.log(`ADB notification test skipped: ${error.message}`);
     return;
   }
-  const shortcutTarget = findVsCodeExecutable() || process.execPath;
-  childProcess.execFileSync(
-    "powershell.exe",
-    ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Sta", "-Command", WINDOWS_SYSTEM_NOTIFY_PS_V7],
-    {
-      stdio: "inherit",
-      windowsHide: true,
-      env: {
-        ...process.env,
-        CODEXPATCH_TITLE: "vscodexkit 测试",
-        CODEXPATCH_BODY: "如果看到这条，系统通知通道可用。",
-        CODEXPATCH_ICON: "Info",
-        CODEXPATCH_AUMID: "vscodexkit.VSCode",
-        CODEXPATCH_SHORTCUT_TARGET: shortcutTarget,
-        CODEXPATCH_SHORTCUT_ICON: shortcutTarget
-      }
+
+  const serials = parseAdbDeviceSerials(output);
+  if (serials.length === 0) {
+    console.log("ADB notification test skipped: no connected devices in state=device.");
+    return;
+  }
+  for (const serial of serials) {
+    try {
+      childProcess.execFileSync(
+        adb,
+        ["-s", serial, ...buildAdbNotificationArgs(title, body, event)],
+        {
+          encoding: "utf8",
+          timeout: 8000,
+          windowsHide: true,
+          stdio: ["ignore", "pipe", "pipe"]
+        }
+      );
+      console.log(`ADB notification test sent: ${serial}`);
+    } catch (error) {
+      console.log(`ADB notification test failed: ${serial}: ${error.message}`);
     }
-  );
-  console.log("Notification test finished.");
+  }
+}
+
+function findAdbExecutable() {
+  const executable = process.platform === "win32" ? "adb.exe" : "adb";
+  const candidates = [
+    process.env.CODEXPATCH_ADB_PATH,
+    process.env.ANDROID_HOME &&
+      path.join(process.env.ANDROID_HOME, "platform-tools", executable),
+    process.env.ANDROID_SDK_ROOT &&
+      path.join(process.env.ANDROID_SDK_ROOT, "platform-tools", executable),
+    process.env.LOCALAPPDATA &&
+      path.join(process.env.LOCALAPPDATA, "Android", "Sdk", "platform-tools", executable)
+  ];
+  return candidates.find((candidate) => candidate && fs.existsSync(candidate)) || executable;
 }
 
 function showScriptNotification(title, body, icon = "Info") {
@@ -829,11 +1042,7 @@ function findVsCodeExecutableFromPath() {
 }
 
 function getTargetFiles(extensionDir) {
-  const webviewAppMain = findWebviewAssetByNeedle(
-    extensionDir,
-    APP_MAIN_INTERRUPT_ANCHOR,
-    MARKERS.webviewUserInterrupt
-  );
+  const webviewAppMain = findWebviewAppMain(extensionDir);
   const webviewAppMainRelativePath = webviewAppMain ? path.relative(extensionDir, webviewAppMain) : null;
   return {
     extensionJs: path.join(extensionDir, EXTENSION_JS),
@@ -858,7 +1067,7 @@ function normalizeRelativePath(relativePath) {
   return String(relativePath).split(path.sep).join("/");
 }
 
-function findWebviewAssetByNeedle(extensionDir, needle, marker) {
+function findWebviewAppMain(extensionDir) {
   const assetsDir = path.join(extensionDir, WEBVIEW_ASSETS_DIR);
   if (!fs.existsSync(assetsDir)) return null;
   const matches = [];
@@ -871,7 +1080,12 @@ function findWebviewAssetByNeedle(extensionDir, needle, marker) {
     } catch {
       continue;
     }
-    if (source.includes(needle) || source.includes(marker)) matches.push(filePath);
+    if (
+      source.includes(MARKERS.webviewUserInterrupt) ||
+      WEBVIEW_APP_MAIN_NEEDLES.every((needle) => source.includes(needle))
+    ) {
+      matches.push(filePath);
+    }
   }
   if (matches.length > 1) {
     throw new Error(`Found multiple candidate webview app bundles: ${matches.join(", ")}`);
@@ -985,6 +1199,7 @@ function getPatchStatus(files) {
   const uiSource = uiExists ? readText(files.webviewUi) : "";
   const appMainExists = Boolean(files.webviewAppMain && fs.existsSync(files.webviewAppMain));
   const appMainSource = appMainExists ? readText(files.webviewAppMain) : "";
+  const webviewRetrySymbolResolution = inspectWebviewRetryPlan(appMainSource);
   const baselineMeta = readJsonIfExists(files.baselineMeta);
 
   return {
@@ -999,22 +1214,26 @@ function getPatchStatus(files) {
       fs.existsSync(files.baselineWebviewIndex),
     baselineVersion: baselineMeta?.extensionVersion || null,
     notificationPatched: extensionSource.includes(MARKERS.notifyV10),
-    notificationAnchorCount: countOccurrences(extensionSource, ORIGINAL_NOTIFICATION_ANCHOR),
+    notificationAnchorCount: countPatternMatches(extensionSource, ORIGINAL_NOTIFICATION_PATTERN),
     mcpLifecyclePatched: extensionSource.includes(MARKERS.mcpLifecycle),
     mcpLifecycleAnchorCount: countOccurrences(extensionSource, MCP_LIFECYCLE_ANCHOR),
     appServerRequestPatched: extensionSource.includes(MARKERS.appServerRequest),
-    appServerRequestAnchorCount: countOccurrences(extensionSource, APP_SERVER_REQUEST_ANCHOR),
+    appServerRequestAnchorCount: countPatternMatches(extensionSource, APP_SERVER_REQUEST_PATTERN),
     threadStreamStatePatched: extensionSource.includes(MARKERS.threadStreamState),
-    threadStreamStateAnchorCount: countOccurrences(extensionSource, THREAD_STREAM_STATE_ANCHOR),
+    threadStreamStateAnchorCount: countPatternMatches(extensionSource, THREAD_STREAM_STATE_PATTERN),
     userInterruptPatched: extensionSource.includes(MARKERS.userInterrupt),
     userInterruptAnchorCount: countOccurrences(extensionSource, USER_INTERRUPT_ANCHOR),
     webviewUserInterruptPatched: appMainSource.includes(MARKERS.webviewUserInterrupt),
-    webviewInterruptAnchorCount: countOccurrences(appMainSource, APP_MAIN_INTERRUPT_ANCHOR),
-    webviewFollowerInterruptAnchorCount: countOccurrences(appMainSource, APP_MAIN_FOLLOWER_INTERRUPT_ANCHOR),
+    webviewInterruptAnchorCount: countPatternMatches(appMainSource, APP_MAIN_INTERRUPT_PATTERN),
+    webviewFollowerInterruptAnchorCount: countPatternMatches(
+      appMainSource,
+      APP_MAIN_FOLLOWER_INTERRUPT_PATTERN
+    ),
     webviewAutoRetryPatched: appMainSource.includes(MARKERS.webviewAutoRetry),
     webviewAutoRetryCommandPatched: appMainSource.includes(MARKERS.webviewAutoRetryCommand),
-    webviewAutoRetryCommandAnchorCount: countOccurrences(appMainSource, APP_MAIN_CODEXPATCH_RETRY_COMMAND_ANCHOR),
-    webviewAutoRetryAnchorCount: countOccurrences(appMainSource, APP_MAIN_AUTO_RETRY_ANCHOR),
+    webviewAutoRetryCommandAnchorCount: countOccurrences(appMainSource, RETRY_HANDLER_KEY),
+    webviewRetrySymbolResolution,
+    webviewAutoRetryAnchorCount: countPatternMatches(appMainSource, APP_MAIN_AUTO_RETRY_PATTERN),
     hostSettingsPatched: extensionSource.includes(MARKERS.hostSettings),
     hostSettingsAnchorCount: countOccurrences(extensionSource, HOST_MESSAGE_ANCHOR),
     webviewIndexPatched: indexSource.includes(MARKERS.webviewIndex),
@@ -1203,7 +1422,8 @@ function isPatchStatusOk(status) {
     status.webviewUiPatched &&
     status.webviewUserInterruptPatched &&
     status.webviewAutoRetryPatched &&
-    status.webviewAutoRetryCommandPatched
+    status.webviewAutoRetryCommandPatched &&
+    status.webviewRetrySymbolResolution.state === "FOUND"
   );
 }
 
@@ -1239,6 +1459,15 @@ function printStatus(extensionDir, manifest, files) {
   console.log(`WV int:     ${status.webviewUserInterruptPatched ? "yes" : "no"}`);
   console.log(`WV retry:   ${status.webviewAutoRetryPatched ? "yes" : "no"}`);
   console.log(`WV retry cmd: ${status.webviewAutoRetryCommandPatched ? "yes" : "no"}`);
+  console.log(
+    `WV symbols: HookPoint[${status.webviewRetrySymbolResolution.hookPoint}] state=${status.webviewRetrySymbolResolution.state} rule=${status.webviewRetrySymbolResolution.ruleVersion}` +
+      (status.webviewRetrySymbolResolution.evidenceHash
+        ? ` evidence=${status.webviewRetrySymbolResolution.evidenceHash.slice(0, 12)}`
+        : "")
+  );
+  if (status.webviewRetrySymbolResolution.error) {
+    console.log(`WV sym err: ${status.webviewRetrySymbolResolution.error}`);
+  }
   console.log(`Anchors:    notify=${status.notificationAnchorCount} lifecycle=${status.mcpLifecycleAnchorCount} appReq=${status.appServerRequestAnchorCount} stream=${status.threadStreamStateAnchorCount} interrupt=${status.userInterruptAnchorCount} host=${status.hostSettingsAnchorCount} webview=${status.webviewIndexAnchorCount} wvInt=${status.webviewInterruptAnchorCount}/${status.webviewFollowerInterruptAnchorCount} wvRetry=${status.webviewAutoRetryAnchorCount} wvRetryCmd=${status.webviewAutoRetryCommandAnchorCount}`);
 
   const ok = isPatchStatusOk(status);
@@ -1273,27 +1502,16 @@ function patchWebviewIndex(source) {
 function applyPatch(extensionDir, manifest, files, options) {
   const status = getPatchStatus(files);
   const baseline = ensureBaseline(extensionDir, manifest, files, status);
-  const notificationHandler = buildNotificationHandler(options);
   const webviewUiSource = buildWebviewUiSourceLite(options);
 
-  const extensionSourceWithNotify = replaceExactlyOnce(
-    baseline.extensionSource,
-    ORIGINAL_NOTIFICATION_ANCHOR,
-    notificationHandler,
-    "notification anchor in clean baseline"
-  );
+  const extensionSourceWithNotify = patchNotificationRegistration(baseline.extensionSource, options);
   const extensionSourceWithHostSettings = replaceExactlyOnce(
     extensionSourceWithNotify,
     HOST_MESSAGE_ANCHOR,
     HOST_MESSAGE_PATCH,
     "host message anchor in clean baseline"
   );
-  const extensionSourceWithAppServerRequest = replaceExactlyOnce(
-    extensionSourceWithHostSettings,
-    APP_SERVER_REQUEST_ANCHOR,
-    APP_SERVER_REQUEST_PATCH,
-    "app server request anchor in clean baseline"
-  );
+  const extensionSourceWithAppServerRequest = patchAppServerRequest(extensionSourceWithHostSettings);
   const extensionSourceWithLifecycle = replaceExactlyOnce(
     extensionSourceWithAppServerRequest,
     MCP_LIFECYCLE_ANCHOR,
@@ -1306,37 +1524,19 @@ function applyPatch(extensionDir, manifest, files, options) {
     USER_INTERRUPT_PATCH,
     "user interrupt anchor in clean baseline"
   );
-  const extensionSource = replaceExactlyOnce(
-    extensionSourceWithUserInterrupt,
-    THREAD_STREAM_STATE_ANCHOR,
-    THREAD_STREAM_STATE_PATCH,
-    "thread stream state anchor in clean baseline"
-  );
+  const extensionSource = patchThreadStreamState(extensionSourceWithUserInterrupt);
   const indexSource = patchWebviewIndex(baseline.indexSource);
-  const appMainWithInterrupt = replaceExactlyOnce(
-    baseline.appMainSource,
-    APP_MAIN_INTERRUPT_ANCHOR,
-    APP_MAIN_INTERRUPT_PATCH,
-    "webview interrupt-conversation anchor in clean baseline"
+  const appMainWithInterrupt = patchAppMainInterrupt(baseline.appMainSource);
+  const appMainWithFollowerInterrupt = patchAppMainFollowerInterrupt(appMainWithInterrupt);
+  const retryPlan = resolveWebviewRetryPlan(appMainWithFollowerInterrupt);
+  console.log(
+    `HookPoint[${retryPlan.hookPoint}] state=${retryPlan.state} rule=${retryPlan.ruleVersion} evidence=${retryPlan.evidenceHash.slice(0, 12)}`
   );
-  const appMainWithFollowerInterrupt = replaceExactlyOnce(
-    appMainWithInterrupt,
-    APP_MAIN_FOLLOWER_INTERRUPT_ANCHOR,
-    APP_MAIN_FOLLOWER_INTERRUPT_PATCH,
-    "webview follower interrupt anchor in clean baseline"
-  );
-  const appMainWithAutoRetryCommand = replaceExactlyOnce(
+  const appMainWithAutoRetryCommand = patchAppMainRetryCommands(
     appMainWithFollowerInterrupt,
-    APP_MAIN_CODEXPATCH_RETRY_COMMAND_ANCHOR,
-    APP_MAIN_CODEXPATCH_RETRY_COMMAND_PATCH,
-    "webview auto retry command anchor in clean baseline"
+    retryPlan
   );
-  const appMainSource = replaceExactlyOnce(
-    appMainWithAutoRetryCommand,
-    APP_MAIN_AUTO_RETRY_ANCHOR,
-    APP_MAIN_AUTO_RETRY_PATCH,
-    "webview auto retry message anchor in clean baseline"
-  );
+  const appMainSource = patchAppMainAutoRetry(appMainWithAutoRetryCommand);
 
   if (
     status.extensionSource === extensionSource &&
@@ -1384,6 +1584,25 @@ function replaceExactlyOnce(source, needle, replacement, label) {
     throw new Error(`Expected exactly one ${label}, found ${count}.`);
   }
   return source.replace(needle, replacement);
+}
+
+function countPatternMatches(source, pattern) {
+  return findPatternMatches(source, pattern).length;
+}
+
+function replaceExactlyOnceByPattern(source, pattern, buildReplacement, label) {
+  const matches = findPatternMatches(source, pattern);
+  if (matches.length !== 1) {
+    throw new Error(`Expected exactly one ${label}, found ${matches.length}.`);
+  }
+  const match = matches[0];
+  const replacement = buildReplacement(match);
+  return source.slice(0, match.index) + replacement + source.slice(match.index + match[0].length);
+}
+
+function findPatternMatches(source, pattern) {
+  const flags = pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`;
+  return Array.from(source.matchAll(new RegExp(pattern.source, flags)));
 }
 
 function restorePatch(extensionDir, manifest, files, options = {}) {
@@ -1507,9 +1726,23 @@ function isPathInside(parent, child) {
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
-try {
-  main();
-} catch (error) {
-  console.error(error && error.stack ? error.stack : String(error));
-  process.exit(1);
+if (require.main === module) {
+  try {
+    main();
+  } catch (error) {
+    console.error(error && error.stack ? error.stack : String(error));
+    process.exit(1);
+  }
 }
+
+module.exports = {
+  buildAdbNotificationArgs,
+  findWebviewAppMain,
+  parseAdbDeviceSerials,
+  patchAppMainFollowerInterrupt,
+  patchAppMainInterrupt,
+  patchAppMainRetryCommands,
+  patchAppServerRequest,
+  patchNotificationRegistration,
+  patchThreadStreamState
+};

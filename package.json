@@ -1,19 +1,20 @@
 {
   "name": "vscodexkit",
-  "version": "0.8.24",
+  "version": "0.8.27",
   "private": true,
   "description": "Small reversible toolkit for the OpenAI Codex VSCode extension.",
   "type": "commonjs",
   "files": [
     "bin",
+    "lib",
     "README.md"
   ],
   "bin": {
     "vscodexkit": "./bin/vscodexkit.js"
   },
   "scripts": {
-    "lint": "node --check ./bin/vscodexkit.js",
-    "test": "npm run lint && npm run check",
+    "lint": "node --check ./bin/vscodexkit.js && node --check ./lib/webview-symbol-resolver.js",
+    "test": "npm run lint && node --test ./test/vscodexkit.test.js",
     "check": "node ./bin/vscodexkit.js check",
     "apply": "node ./bin/vscodexkit.js apply",
     "restore": "node ./bin/vscodexkit.js restore",

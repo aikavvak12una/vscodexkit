@@ -8,6 +8,7 @@ VSCode 用户数据、工作区数据或项目文件。
 ## 功能
 
 - Windows 系统级通知：任务完成、失败、需要审批、需要用户输入。
+- ADB Android 通知：向所有状态为 `device` 的当前连接设备同步运行时通知。
 - 自动 Retry：当 stream 重试耗尽导致失败时，自动重新发送 retry。
 - 每个扩展版本备份干净原版基线：`.codexpatch/original`。
 
@@ -30,6 +31,14 @@ node .\bin\vscodexkit.js apply --no-notify
 node .\bin\vscodexkit.js apply --no-runtime-notify
 node .\bin\vscodexkit.js apply --no-auto-retry
 node .\bin\vscodexkit.js apply --runtime-notify --auto-retry
+```
+
+ADB 通知使用 Android SDK 的 `adb` 和设备端 `cmd notification post`。只处理
+`adb devices` 中状态为 `device` 的设备；`offline` 和 `unauthorized` 设备会被忽略。
+`--no-runtime-notify` 会同时关闭 Windows 与 ADB 运行时通知。可使用以下命令测试：
+
+```powershell
+node .\bin\vscodexkit.js test-notify
 ```
 
 卸载并恢复原版扩展：
