@@ -10,6 +10,7 @@ const {
   buildAdbNotificationArgs,
   findWebviewAppMain,
   parseAdbDeviceSerials,
+  patchAppMainAutoRetry,
   patchAppMainFollowerInterrupt,
   patchAppMainInterrupt,
   patchAppMainRetryCommands,
@@ -55,11 +56,17 @@ test("preserves current notification callback identifiers", () => {
     autoRetry: true
   });
 
-  assert.match(patched, /codexpatch:v19:adb-device-notify/);
+  assert.match(patched, /codexpatch:v21:retry-message-reuse/);
   assert.match(patched, /return connection\.registerInternalNotificationHandler\(notification=>/);
   assert.match(patched, /events\.emit\("turnComplete"\)/);
   assert.match(patched, /cpNotifyAdb\(h,g,u\)/);
   assert.match(patched, /kind:"retry",message:"Codex 正在自动重试"/);
+  assert.match(patched, /if\(!e\.notified\)e\.notified=true,cpNotify/);
+  assert.match(patched, /notify-skip-stale-completed-during-retry/);
+  assert.match(patched, /cpRestartRetryRound\(e\)/);
+  assert.match(patched, /if\(n===\"unknown\"\).*auto-retry-skip-output-boundary/);
+  assert.match(patched, /a=n===\"absent\"\?\"rollback\"/);
+  assert.match(patched, /\"edit-message\":\"message\"/);
   assert.doesNotMatch(patched, /return d\.registerInternalNotificationHandler\(Re=>/);
 });
 
@@ -121,6 +128,29 @@ test("patches arbitrarily renamed follower interrupt bindings", () => {
     /conversationId:request\.conversationId,requestId:request\.requestId/
   );
   assert.match(patched, /codexpatch:v2:webview-user-interrupt/);
+});
+
+test("webview rollback retry fails closed without proven empty output", () => {
+  const source =
+    "case`ipc-broadcast`:event.method===`automation-capability-event`&&" +
+    "event.sourceClientId===`desktop`&&event.version===version(`automation-capability-event`)&&" +
+    "forward(clients,hosts.getForHostId(event.params.hostId),event.params)," +
+    "navigate({claimAppConnectOAuthCallback:claim,isCompactWindow:compact,message:event," +
+    "navigate:go,queryClient:query});break bb7;" +
+    "case`thread-follower-start-turn-request`:try{let result=await request(" +
+    "`thread-follower-start-turn-for-host`,{hostId:event.hostId,...event.params});" +
+    "dispatch.dispatchMessage(`thread-follower-start-turn-response`," +
+    "{requestId:event.requestId,result:result})";
+  const patched = patchAppMainAutoRetry(source);
+
+  assert.match(patched, /hadTrackedOutput!==!1/);
+  assert.match(patched, /auto-retry-send-skip-output-boundary/);
+  assert.match(patched, /thread-follower-edit-last-user-turn-for-host/);
+  assert.match(patched, /i===`edit-message`&&\(p=\{hostId:p\.hostId,conversationId:t,turnId:n,message:p\.text\}\)/);
+  assert.ok(
+    patched.indexOf("hadTrackedOutput!==!1") <
+      patched.indexOf("codexpatch-retry-turn-for-host")
+  );
 });
 
 test("resolves and patches arbitrarily renamed retry symbols", () => {
