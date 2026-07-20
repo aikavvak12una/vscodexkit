@@ -5,6 +5,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
+const vm = require("node:vm");
 
 const {
   buildAdbNotificationArgs,
@@ -14,7 +15,9 @@ const {
   patchAppMainFollowerInterrupt,
   patchAppMainInterrupt,
   patchAppMainRetryCommands,
-  patchNotificationRegistration
+  patchHostUserInterrupt,
+  patchNotificationRegistration,
+  patchThreadStreamState
 } = require("../bin/vscodexkit.js");
 const {
   RETRY_HANDLER_KEY,
@@ -39,6 +42,24 @@ test("locates an app-main bundle after minified wrapper names change", (t) => {
   assert.equal(findWebviewAppMain(extensionDir), expected);
 });
 
+test("locates the current app-main bundle after follower request events were removed", (t) => {
+  const extensionDir = makeExtensionFixture(t);
+  const assetsDir = path.join(extensionDir, "webview", "assets");
+  const expected = path.join(assetsDir, "app-main-current.js");
+  fs.writeFileSync(
+    expected,
+    [
+      '"interrupt-conversation"',
+      '"thread-follower-interrupt-turn-for-host"',
+      '"retry-safety-buffered-turn-for-host"',
+      "case`worker-response`:case`worker-event`:"
+    ].join(";"),
+    "utf8"
+  );
+
+  assert.equal(findWebviewAppMain(extensionDir), expected);
+});
+
 test("fails closed when app-main discovery is ambiguous", (t) => {
   const extensionDir = makeExtensionFixture(t);
   const assetsDir = path.join(extensionDir, "webview", "assets");
@@ -56,18 +77,208 @@ test("preserves current notification callback identifiers", () => {
     autoRetry: true
   });
 
-  assert.match(patched, /codexpatch:v21:retry-message-reuse/);
+  assert.match(patched, /codexpatch:v22:notification-types/);
   assert.match(patched, /return connection\.registerInternalNotificationHandler\(notification=>/);
   assert.match(patched, /events\.emit\("turnComplete"\)/);
   assert.match(patched, /cpNotifyAdb\(h,g,u\)/);
-  assert.match(patched, /kind:"retry",message:"Codex 正在自动重试"/);
-  assert.match(patched, /if\(!e\.notified\)e\.notified=true,cpNotify/);
+  assert.match(patched, /kind:"retry",params:\{\.\.\.g,errorMessage:y\}/);
+  assert.match(patched, /if\(!x\.notified\)x\.notified=true,cpNotify/);
+  assert.match(patched, /Codex 因错误中断，未执行自动重试/);
+  assert.match(patched, /Codex 自动重试后助手已回应/);
+  assert.match(patched, /Codex 需要审批命令/);
+  assert.match(patched, /cpObserveNotification\(notification\)/);
   assert.match(patched, /notify-skip-stale-completed-during-retry/);
   assert.match(patched, /cpRestartRetryRound\(e\)/);
-  assert.match(patched, /if\(n===\"unknown\"\).*auto-retry-skip-output-boundary/);
+  assert.match(patched, /if\(n===\"unknown\"\)cpLog\(\"auto-retry-output-unknown-message-only\"/);
+  assert.match(
+    patched,
+    /if\(r&&typeof r===\"object\"&&cpObjHasAssistantOutput\(r\)\)return\"present\"/
+  );
+  assert.match(patched, /if\(!i\)return\"unknown\"/);
+  assert.match(patched, /s\.sourceTurnId=cpText\(e\?\.turnId\)/);
+  assert.match(patched, /n\.activeTurnId=o,n\.awaitingRestart=false/);
+  assert.match(patched, /auto-retry-terminal-restart-observed/);
+  assert.match(patched, /i!==o\.sourceTurnId/);
+  assert.match(patched, /auto-retry-skip-unproven-terminal/);
+  assert.doesNotMatch(patched, /r===\"mcp\"/);
   assert.match(patched, /a=n===\"absent\"\?\"rollback\"/);
   assert.match(patched, /\"edit-message\":\"message\"/);
   assert.doesNotMatch(patched, /return d\.registerInternalNotificationHandler\(Re=>/);
+});
+
+test("retries unknown output without rollback and rejects a stale terminal", () => {
+  const source =
+    'items.push(connection.registerInternalNotificationHandler(notification=>{notification.method==="turn/completed"&&events.emit("turnComplete")}));';
+  const patched = patchNotificationRegistration(source, {
+    runtimeNotify: false,
+    autoRetry: true
+  });
+  const context = {
+    items: [],
+    connection: {
+      registerInternalNotificationHandler(handler) {
+        return handler;
+      }
+    },
+    events: { emit() {} },
+    require() {
+      throw new Error("disabled in retry replay");
+    }
+  };
+  vm.runInNewContext(patched, context);
+  const retries = [];
+  context.__codexpatchBroadcastToWebview = (message) => retries.push(message);
+
+  context.items[0]({
+    method: "turn/completed",
+    params: {
+      threadId: "conversation-1",
+      turn: {
+        id: "turn-1",
+        status: "failed",
+        error: { message: "We're currently experiencing high demand, which may cause temporary errors." }
+      }
+    }
+  });
+  assert.equal(retries.length, 1);
+  assert.equal(retries[0].outputState, "unknown");
+  assert.equal(retries[0].mode, "message");
+  assert.equal(retries[0].allowMessageRetry, true);
+  assert.equal(retries[0].hadTrackedOutput, false);
+
+  context.items[0]({
+    method: "turn/completed",
+    params: {
+      threadId: "conversation-1",
+      turn: { id: "turn-1", status: "completed" }
+    }
+  });
+  assert.equal(retries.length, 1);
+
+  context.items[0]({
+    method: "turn/completed",
+    params: {
+      threadId: "conversation-1",
+      turn: {
+        id: "turn-2",
+        status: "failed",
+        error: { message: "We're currently experiencing high demand, which may cause temporary errors." }
+      }
+    }
+  });
+  assert.equal(retries.length, 2);
+  assert.equal(retries[1].mode, "edit-message");
+  assert.equal(retries[1].turnId, "turn-2");
+});
+
+test("emits the five requested notification types from proven lifecycle events", () => {
+  const source =
+    'items.push(connection.registerInternalNotificationHandler(notification=>{notification.method==="turn/completed"&&events.emit("turnComplete")}));';
+  const patched = patchNotificationRegistration(source, {
+    runtimeNotify: true,
+    autoRetry: true
+  });
+  const logLines = [];
+  const retries = [];
+  const context = {
+    items: [],
+    connection: {
+      registerInternalNotificationHandler(handler) {
+        return handler;
+      }
+    },
+    events: { emit() {} },
+    process: { env: {}, execPath: "codex", platform: "linux" },
+    require(name) {
+      if (name === "fs") {
+        return {
+          appendFileSync(_file, data) {
+            logLines.push(String(data));
+          }
+        };
+      }
+      if (name === "os") return { tmpdir: () => "/tmp" };
+      if (name === "path") return path;
+      if (name === "child_process") {
+        return {
+          execFile(_file, _args, _options, callback) {
+            callback(null, "List of devices attached\n", "");
+          }
+        };
+      }
+      throw new Error(`Unexpected module: ${name}`);
+    }
+  };
+  vm.runInNewContext(patched, context);
+  context.__codexpatchBroadcastToWebview = (message) => retries.push(message);
+
+  context.items[0]({
+    method: "turn/completed",
+    params: {
+      threadId: "no-retry",
+      turn: {
+        id: "failed-1",
+        status: "failed",
+        error: { message: "fatal local error" }
+      }
+    }
+  });
+  context.items[0]({
+    method: "turn/completed",
+    params: {
+      threadId: "retry",
+      turn: {
+        id: "failed-2",
+        status: "failed",
+        error: { message: "We're currently experiencing high demand." }
+      }
+    }
+  });
+  context.items[0]({
+    method: "turn/started",
+    params: { threadId: "retry", turn: { id: "retry-1", status: "inProgress" } }
+  });
+  context.items[0]({
+    method: "item/agentMessage/delta",
+    params: { threadId: "retry", turnId: "retry-1", delta: "Recovered response" }
+  });
+  context.items[0]({
+    method: "item/agentMessage/delta",
+    params: { threadId: "retry", turnId: "retry-1", delta: "More response" }
+  });
+  context.__codexpatchObserveAppServerRequest({
+    method: "item/commandExecution/requestApproval",
+    id: "approval-1",
+    params: { threadId: "approval" }
+  });
+  context.items[0]({
+    method: "turn/completed",
+    params: {
+      threadId: "complete",
+      turn: { id: "complete-1", status: "completed" }
+    }
+  });
+
+  const sent = logLines
+    .filter((line) => line.includes(" notify-send "))
+    .map((line) => JSON.parse(line.slice(line.indexOf("{"))));
+  assert.equal(retries.length, 1);
+  assert.equal(
+    sent.filter((entry) => entry.body === "Codex 自动重试后助手已回应").length,
+    1
+  );
+  assert.ok(
+    sent.some((entry) =>
+      entry.body.startsWith("Codex 因错误中断，未执行自动重试: fatal local error")
+    )
+  );
+  assert.ok(
+    sent.some((entry) =>
+      entry.body.startsWith("Codex 因错误中断，正在自动重试")
+    )
+  );
+  assert.ok(sent.some((entry) => entry.body === "Codex 需要审批命令"));
+  assert.ok(sent.some((entry) => entry.body === "Codex 任务已完成"));
 });
 
 test("selects every connected adb device and excludes unavailable states", () => {
@@ -130,6 +341,35 @@ test("patches arbitrarily renamed follower interrupt bindings", () => {
   assert.match(patched, /codexpatch:v2:webview-user-interrupt/);
 });
 
+test("patches user interrupt tracking into the current generic follower handler", () => {
+  const source =
+    "function setup({hostId:h,ipcClient:i,viewService:v}){" +
+    "let owner=async({conversationId:c})=>await v.getThreadRole({hostId:h,conversationId:c})===`owner`," +
+    "register=(method,timeout=wait)=>i.addRequestHandler(method,owner,({params:p})=>" +
+    "forward(v,h,{method:method,params:p},timeout)),handlers=[" +
+    "register(`thread-follower-start-turn`),register(`thread-follower-interrupt-turn`)];}";
+  const patched = patchHostUserInterrupt(source);
+
+  assert.match(patched, /method===`thread-follower-interrupt-turn`/);
+  assert.match(patched, /conversationId:p\.conversationId/);
+  assert.match(patched, /forward\(v,h,\{method:method,params:p\},timeout\)/);
+  assert.match(patched, /codexpatch:v1:user-interrupt-suppress/);
+});
+
+test("patches stream observation into the current broadcast dispatcher", () => {
+  const source =
+    'case"thread-stream-state-changed":await receiver.threadStreamStateChanged(' +
+    "{sourceClientId:event.sourceClientId,params:event.params});return;";
+  const patched = patchThreadStreamState(source);
+
+  assert.match(patched, /__codexpatchObserveThreadStreamState\?\.\(event\.params\)/);
+  assert.match(
+    patched,
+    /await receiver\.threadStreamStateChanged\(\{sourceClientId:event\.sourceClientId,params:event\.params\}\)/
+  );
+  assert.match(patched, /codexpatch:v2:thread-stream-state-conversation-end/);
+});
+
 test("webview rollback retry fails closed without proven empty output", () => {
   const source =
     "case`ipc-broadcast`:event.method===`automation-capability-event`&&" +
@@ -150,6 +390,24 @@ test("webview rollback retry fails closed without proven empty output", () => {
   assert.ok(
     patched.indexOf("hadTrackedOutput!==!1") <
       patched.indexOf("codexpatch-retry-turn-for-host")
+  );
+});
+
+test("patches auto retry into the current unified webview message switch", () => {
+  const source =
+    "if(methodSupported(message.method)&&requestHost(" +
+    "`handle-app-server-notification-for-host`,{hostId:message.hostId," +
+    "notification:{method:message.method,params:message.params}})}," +
+    "handleMessage=async event=>{if(!isHostMessage(event))bb63:switch(event.type){" +
+    "case`worker-response`:case`worker-event`:break bb63;";
+  const patched = patchAppMainAutoRetry(source);
+
+  assert.match(patched, /case`codexpatch-auto-retry`/);
+  assert.match(patched, /await requestHost\(command,params\)/);
+  assert.match(patched, /break bb63/);
+  assert.ok(
+    patched.indexOf("case`codexpatch-auto-retry`") <
+      patched.indexOf("case`worker-response`")
   );
 });
 

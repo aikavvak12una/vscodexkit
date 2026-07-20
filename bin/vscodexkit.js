@@ -62,15 +62,14 @@ const WEBVIEW_ASSETS_DIR = path.join("webview", "assets");
 const WEBVIEW_APP_MAIN_NEEDLES = [
   '"interrupt-conversation"',
   '"thread-follower-interrupt-turn-for-host"',
-  '"retry-safety-buffered-turn-for-host"',
-  "case`thread-follower-start-turn-request`:"
+  '"retry-safety-buffered-turn-for-host"'
 ];
 const BASELINE_DIR = ".codexpatch";
 const BASELINE_ORIGINAL_DIR = path.join(BASELINE_DIR, "original");
 const BASELINE_META = path.join(BASELINE_DIR, "baseline.json");
 
 const MARKERS = {
-  notifyV10: "codexpatch:v21:retry-message-reuse",
+  notifyV10: "codexpatch:v22:notification-types",
   mcpLifecycle: "codexpatch:v1:mcp-lifecycle-conversation-end",
   appServerRequest: "codexpatch:v2:app-server-request-approval",
   threadStreamState: "codexpatch:v2:thread-stream-state-conversation-end",
@@ -325,7 +324,7 @@ function cpErr(e){return e==null?"":typeof e==="string"?e:cpText(e.message)||cpT
 function cpMsg(e){let r=e?.params||{},n=e?.error||r.error||r.turn?.error||r.payload?.error||r.event?.error;return cpErr(n)||cpText(e?.body)||cpText(e?.message)||cpText(r.message)||cpText(r.errorMessage)||cpText(r.reason)||cpText(r.details)}
 function cpConv(e){let r=e?.params||{};return cpText(e?.conversationId)||cpText(e?.threadId)||cpText(r.conversationId)||cpText(r.threadId)||"global"}
 function cpHost(e){let r=e?.params||{};return cpText(e?.hostId)||cpText(r.hostId)||"local"}
-function cpTurnId(e){let r=e?.params||{},n=r.change?.patch?.value||r.patch?.value||{};return cpText(e?.turnId)||cpText(r.turn?.id)||cpText(n.turnId)||""}
+function cpTurnId(e){let r=e?.params||{},n=r.change?.patch?.value||r.patch?.value||{};return cpText(e?.turnId)||cpText(r.turn?.id)||cpText(r.turnId)||cpText(r.item?.turnId)||cpText(n.turnId)||""}
 function cpModel(e){let r=e?.params||{},n=r.change?.patch?.value||r.patch?.value||{};return cpText(e?.model)||cpText(r.model)||cpText(r.turn?.params?.model)||cpText(n.params?.model)||cpText(n.model)||""}
 function cpStatus(e){return e?.status||e?.params?.turn?.status||"unknown"}
 function cpFinal(e){return e==="completed"||e==="failed"||e==="interrupted"}
@@ -333,7 +332,7 @@ function cpApproval(e){return e==="approval_needed"||e==="needs_approval"||e==="
 function cpAwaitingApprovalMethod(e){let r=cpText(e),n=r.toLowerCase();return r==="codex/event/exec_approval_request"||r==="codex/event/apply_patch_approval_request"||n==="item/commandexecution/requestapproval"||n==="item/filechange/requestapproval"||n==="item/permissions/requestapproval"||/(approval_request|requestapproval|request_approval|approvalrequest|permissions_request|permissionrequest)/i.test(r)}
 function cpAwaitingInputMethod(e){let r=cpText(e),n=r.toLowerCase();return r==="codex/event/request_user_input"||r==="codex/event/elicitation_request"||r==="codex/event/dynamic_tool_call_request"||n==="item/tool/requestuserinput"||n==="item/tool/requestoptionpicker"||n==="item/tool/requestsetupcodexcontextpicker"||n==="item/plan/requestimplementation"||/(requestuserinput|request_user_input|requestoptionpicker|requestsetupcodexcontextpicker|requestimplementation|elicitation_request|dynamic_tool_call_request)/i.test(r)}
 function cpAwaitingUserMethod(e){return cpAwaitingApprovalMethod(e)||cpAwaitingInputMethod(e)}
-function cpAuthoritativeEnd(e){let r=e?.source||"",n=e?.method||"";return r==="turn-completed"||r==="mcp"||n==="turn/completed"||n==="codex/event/task_complete"||n==="codex/event/error"||n==="codex/event/stream_error"||n==="codex/event/turn_aborted"}
+function cpAuthoritativeEnd(e){let r=e?.source||"",n=e?.method||"";return r==="turn-completed"||n==="turn/completed"||n==="codex/event/task_complete"||n==="codex/event/error"||n==="codex/event/stream_error"||n==="codex/event/turn_aborted"}
 function cpMarkUserInterrupt(e){try{let r=cpConv(e),n=Date.now(),o=globalThis.__codexpatchUserInterrupts||(globalThis.__codexpatchUserInterrupts=new Map);if(!r||r==="global"){cpLog("user-interrupt-mark-skip",{conversationId:r,requestId:cpRequestId(e),method:e?.method});return}o.set(r,{at:n,requestId:cpRequestId(e),method:e?.method||""});for(let[e,r]of o)try{n-r.at>3e5&&o.delete(e)}catch(_){}cpLog("user-interrupt-mark",{conversationId:r,requestId:cpRequestId(e),source:e?.source,method:e?.method})}catch(r){cpLog("user-interrupt-mark-exception",{message:r?.message})}}
 function cpRecentUserInterrupt(e){try{let r=cpConv(e),n=Date.now(),o=globalThis.__codexpatchUserInterrupts;if(!o||!r)return false;let i=o.get(r);if(i&&n-i.at<3e5)return true;i&&o.delete(r);return false}catch(_){return false}}
 function cpLooksUserInterrupted(e){let r=(cpText(e?.method)+" "+cpMsg(e)).toLowerCase(),n=cpStatus(e),o=e?.method||"";if((n==="interrupted"||o==="codex/event/turn_aborted")&&cpRecentUserInterrupt(e))return true;return /user.*(interrupt|cancel|abort)|cancelled by user|canceled by user|aborted by user|用户.*(中断|取消)/.test(r)}
@@ -349,19 +348,22 @@ function cpTurnPathOf(e){let r=cpPath(e),n=r.findIndex(e=>e==="turns"||e==="conv
 function cpPathLooksAssistantOutput(e,r){return cpObjHasAssistantOutput(r)}
 function cpRememberTurnPatch(e,r,n){try{let o=cpConv(e);if(!o||o==="global")return;let i=Date.now(),s=cpOutputMap();for(let[e,r]of s)try{i-r.at>6e5&&s.delete(e)}catch(_){}let a=cpTurnPathOf(r),c=cpFindStatus(n,0),l=cpText(n?.turnId)||cpText(n?.id),u=s.get(o)||{hasOutput:false,at:i};if(a&&u.turnPath&&u.turnPath!==a)u={hasOutput:false,at:i};if(!a&&c==="inProgress"&&l&&u.turnId&&u.turnId!==l&&!u.turnPath)u={hasOutput:false,at:i};if(a)u.turnPath=a;else if(l&&!u.turnId)u.turnId=l;if(cpPathLooksAssistantOutput(r,n)||cpObjHasAssistantOutput(n))u.hasOutput=true;u.at=i;s.set(o,u);if(u.hasOutput)cpLog("auto-retry-output-seen",{conversationId:o,turnId:u.turnId||"",turnPath:u.turnPath||"",itemIndex:cpItemIndexOf(r)})}catch(r){cpLog("auto-retry-output-track-exception",{message:r?.message})}}
 function cpRememberAssistantOutput(e){try{let r=e?.change||e?.params?.change||{};if(r.type==="snapshot"){let n=r.conversationState?.turns||r.conversationState?.conversationTurns||r.conversationState?.visibleTurnEntries;if(Array.isArray(n))for(let r=n.length-1;r>=0;r--){if(cpFindStatus(n[r],0)==="inProgress"){cpRememberTurnPatch(e,["turns",r],n[r]);break}}return}if(Array.isArray(r.patches)){for(let n of r.patches){if(cpPathLooksTurn(n?.path))cpRememberTurnPatch(e,n.path,n?.value)}return}cpRememberTurnPatch(e,[],r)}catch(r){cpLog("auto-retry-output-observe-exception",{message:r?.message})}}
-function cpAssistantOutputStateForRetry(e){try{let r=e?.params?.turn||e?.turn;if(r&&typeof r==="object")return cpObjHasAssistantOutput(r)?"present":"absent";let n=cpConv(e),o=cpTurnId(e),i=cpOutputMap().get(n);if(!i)return"unknown";if(o&&i.turnId&&o!==i.turnId)return"unknown";return i.hasOutput?"present":"absent"}catch(_){return"unknown"}}
+function cpAssistantOutputStateForRetry(e){try{let r=e?.params?.turn||e?.turn;if(r&&typeof r==="object"&&cpObjHasAssistantOutput(r))return"present";let n=cpConv(e),o=cpTurnId(e),i=cpOutputMap().get(n);if(!i)return"unknown";if(o&&i.turnId&&o!==i.turnId)return"unknown";return i.hasOutput?"present":"absent"}catch(_){return"unknown"}}
 function cpRetryRounds(){return globalThis.__codexpatchRetryRounds||(globalThis.__codexpatchRetryRounds=new Map)}
 function cpRetryRound(e){let r=cpConv(e);return r&&r!=="global"?cpRetryRounds().get(r):null}
-function cpArmRetryRound(e){let r=cpConv(e),n=Date.now(),o=cpRetryRounds(),i=o.get(r),s=i||{notified:false,startedAt:n};return s.awaitingRestart=true,s.messageRetry=e?.mode==="message"||e?.mode==="edit-message",s.at=n,o.set(r,s),s}
-function cpRestartRetryRound(e){try{let r=cpConv(e),n=cpRetryRounds().get(r),o=cpTurnId(e);if(n?.awaitingRestart)n.awaitingRestart=false,n.messageRetry&&o&&(n.messageTurnId=o),n.at=Date.now(),cpLog("auto-retry-restart-observed",{conversationId:r,turnId:o,messageRetry:n.messageRetry===true})}catch(_){}}
+function cpArmRetryRound(e){let r=cpConv(e),n=Date.now(),o=cpRetryRounds(),i=o.get(r),s=i||{notified:false,startedAt:n};return s.awaitingRestart=true,s.sourceTurnId=cpText(e?.turnId),s.activeTurnId="",s.responseNotified=false,s.messageRetry=e?.mode==="message"||e?.mode==="edit-message",s.at=n,o.set(r,s),s}
+function cpRestartRetryRound(e){try{let r=cpConv(e),n=cpRetryRounds().get(r),o=cpTurnId(e);if(!n?.awaitingRestart)return;if(!o){cpLog("auto-retry-restart-unproven",{conversationId:r});return}n.activeTurnId=o,n.awaitingRestart=false,n.messageRetry&&(n.messageTurnId=o),n.at=Date.now(),cpLog("auto-retry-restart-observed",{conversationId:r,turnId:o,sourceTurnId:n.sourceTurnId||"",messageRetry:n.messageRetry===true})}catch(_){}}
 function cpClearRetryRound(e,r){try{let n=cpConv(e);cpRetryRounds().delete(n);cpLog("auto-retry-round-end",{conversationId:n,reason:r})}catch(_){}}
 function cpRetryBlob(e){let r=e?.params||{},n=[e?.source,e?.method,cpStatus(e),cpMsg(e),e?.error?.code,r.error?.code,r.turn?.error?.code,r.reason,r.details,r.errorMessage,cpJson(e?.error),cpJson(e?.change),cpJson(r.change),cpJson(r.error),cpJson(r.turn?.error),cpJson(r.payload?.error),cpJson(r.event?.error)].join(" ");return n.slice(0,12e3).toLowerCase()}
 function cpLooksStreamRetryExhausted(e){let r=cpRetryBlob(e),n=(cpText(e?.source)+" "+cpText(e?.method)).toLowerCase(),o=/stream_error|thread-stream-state/.test(n)||/\\bstream\\b|stream[_ -]?/.test(r),i=cpStatus(e)==="failed"&&/(currently experiencing high demand|temporary errors?|temporarily unavailable|service unavailable|overloaded|too many requests|rate limit|\\b429\\b|\\b502\\b|\\b503\\b|\\b504\\b|gateway timeout|network error|fetch failed|failed to fetch|request failed|error sending request|stream disconnected|connection (?:reset|refused|closed|terminated)|econnreset|etimedout|eai_again|enotfound|timed?\\s*out)/.test(r);if(/stream[_ -]?max[_ -]?retries/.test(r))return true;if(i)return true;if(!o)return false;return /max(?:imum)?\\s+retries|retry limit|retries exhausted|exhausted\\s+retries|too many retries|retry attempts? exhausted|all retries failed|stream disconnected|error sending request/.test(r)}
-function cpRequestAutoRetry(e){try{let r=globalThis.__codexpatchSettings||{};if(r.autoRetry!==true){cpLog("auto-retry-skip-disabled",{conversationId:cpConv(e),status:cpStatus(e),method:e?.method});return false}if(cpLooksUserInterrupted(e)){cpLog("auto-retry-skip-user-interrupt",{conversationId:cpConv(e),status:cpStatus(e),method:e?.method});return false}if(!cpLooksStreamRetryExhausted(e)){cpLog("auto-retry-skip-not-stream-max-retries",{conversationId:cpConv(e),status:cpStatus(e),method:e?.method,msg:cpMsg(e)});return false}let n=cpAssistantOutputStateForRetry(e);if(n==="unknown"){cpLog("auto-retry-skip-output-boundary",{conversationId:cpConv(e),outputState:n,status:cpStatus(e),method:e?.method});return false}let o=cpConv(e),i=cpTurnId(e)||cpOutputMap().get(o)?.turnId||"",s=cpRetryRound(e),a=n==="absent"?"rollback":s?.messageRetry&&s.messageTurnId&&s.messageTurnId===i?"edit-message":"message";if(a==="message"&&s?.messageRetry){cpLog("auto-retry-skip-message-turn-mismatch",{conversationId:o,turnId:i,expectedTurnId:s.messageTurnId||""});return false}let c=cpHost(e),l=cpModel(e),u=o+"|"+(i||cpRequestId(e)||cpMsg(e).slice(0,80))+"|"+cpStatus(e)+"|"+(e?.method||"")+"|"+a,f=Date.now(),p=globalThis.__codexpatchAutoRetryLast||(globalThis.__codexpatchAutoRetryLast=new Map),h=p.get(u);if(h&&f-h<3e4){cpLog("auto-retry-skip-duplicate",{key:u,mode:a});return true}for(let[e,r]of p)try{f-r>12e4&&p.delete(e)}catch(_){}let g={type:"codexpatch-auto-retry",hostId:c,conversationId:o,threadId:o,turnId:i,model:l||null,status:cpStatus(e),method:e?.method||"",reason:"stream_max_retries",mode:a,allowMessageRetry:a!=="rollback",hadTrackedOutput:n==="present",outputState:n,windowMs:3e4,at:f},m=globalThis.__codexpatchBroadcastToWebview;if(typeof m==="function"){let e=cpArmRetryRound(g);cpLog("auto-retry-arm",g);m(g);p.set(u,f);if(!e.notified)e.notified=true,cpNotify({source:"auto-retry",method:"codexpatch/auto-retry",conversationId:o,threadId:o,turnId:i,status:"retrying",kind:"retry",message:"Codex 正在自动重试",params:g});else cpLog("auto-retry-notify-skip-round",{conversationId:o});return true}else cpLog("auto-retry-no-broadcast",g);return false}catch(r){cpLog("auto-retry-exception",{message:r?.message});return false}}
-function cpBody(e,r,n,o){if(o==="retry")return n||"Codex 正在自动重试";if(o==="approval"||cpApproval(e)||cpAwaitingUserMethod(r)){if(cpAwaitingInputMethod(r))return n||"Codex 需要你回复问题";return n||"Codex 需要你审批操作"}if(e==="completed")return"Codex 任务已完成";let i=r==="codex/event/stream_error"?"Codex 网络错误，任务已停止":r==="codex/event/error"?"Codex 任务发生错误":e==="interrupted"?"Codex 任务已中断":e==="failed"?"Codex 任务失败":"Codex 任务结束: "+(e??"unknown");return n?i+": "+String(n).slice(0,180):i}
-function cpNotify(e){try{let r=globalThis.__codexpatchSettings||{};if(r.notify===false){cpLog("notify-skip-disabled",e);return}let n=cpStatus(e),o=e?.kind||"",i=e?.method||"",s=cpApproval(n)||o==="approval"||cpAwaitingUserMethod(i),v=o==="retry";if(!s&&!v&&!cpFinal(n)){cpLog("notify-skip-not-final",{status:n,kind:o,method:i});return}if(!s&&!v&&cpLooksUserInterrupted(e)){cpLog("notify-skip-user-interrupt",{status:n,method:i,msg:cpMsg(e)});return}let a=Date.now(),c=globalThis.__codexpatchNotifyLastByConversation||(globalThis.__codexpatchNotifyLastByConversation=new Map),l=cpConv(e),u=s?"approval":v?"retry":n,d=l+"|"+u+"|"+i+"|"+cpRequestId(e),f=c.get(d);if(f&&a-f<1e4){cpLog("notify-skip-duplicate",{key:d,status:n,kind:o});return}for(let[e,r]of c)try{a-r>12e4&&c.delete(e)}catch(_){}c.set(d,a);let p=cpMsg(e),h=s?"Codex 需要处理":"Codex",g=cpBody(n,i,p,o),m=s||n!=="completed";cpLog("notify-send",{conversationId:l,status:n,kind:o,method:i,body:g});cpNotifyAdb(h,g,u);if(process.platform==="win32")try{let e=${JSON.stringify(WINDOWS_SYSTEM_NOTIFY_PS_V8)},r=cpMod(),o=r.path.join(r.os.tmpdir(),"codexpatch-notify.ps1");try{r.fs.writeFileSync(o,e,"utf8");cpLog("notify-script-written",{path:o,bytes:e.length})}catch(e){cpLog("notify-script-write-failed",{message:e?.message})}let n=r.cp.spawn("powershell.exe",["-NoProfile","-ExecutionPolicy","Bypass","-Sta","-File",o],{windowsHide:true,detached:false,stdio:["ignore","ignore","pipe"],env:{...process.env,CODEXPATCH_TITLE:h,CODEXPATCH_BODY:g,CODEXPATCH_ICON:m?"Warning":"Info",CODEXPATCH_EVENT:u,CODEXPATCH_AUMID:"vscodexkit.VSCode",CODEXPATCH_LOG_FILE:process.env.CODEXPATCH_LOG_FILE||r.path.join(r.os.tmpdir(),"codexpatch.log"),CODEXPATCH_SHORTCUT_TARGET:process.execPath,CODEXPATCH_SHORTCUT_ICON:process.execPath}});cpLog("notify-spawned",{pid:n.pid,event:u,file:o});n.stderr?.on?.("data",e=>cpLog("notify-stderr",{message:String(e).slice(0,500)}));n.on?.("exit",(e,r)=>cpLog("notify-exit",{code:e,signal:r,event:u}));n.on?.("error",e=>cpLog("notify-spawn-error",{message:e?.message}));return}catch(e){cpLog("notify-spawn-exception",{message:e?.message})}m?ut.window.showWarningMessage(g):ut.window.showInformationMessage(g)}catch(e){cpLog("notify-exception",{message:e?.message})}}
+function cpRequestAutoRetry(e){try{let r=globalThis.__codexpatchSettings||{};if(r.autoRetry!==true){cpLog("auto-retry-skip-disabled",{conversationId:cpConv(e),status:cpStatus(e),method:e?.method});return false}if(cpLooksUserInterrupted(e)){cpLog("auto-retry-skip-user-interrupt",{conversationId:cpConv(e),status:cpStatus(e),method:e?.method});return false}if(!cpLooksStreamRetryExhausted(e)){cpLog("auto-retry-skip-not-stream-max-retries",{conversationId:cpConv(e),status:cpStatus(e),method:e?.method,msg:cpMsg(e)});return false}let n=cpAssistantOutputStateForRetry(e);if(n==="unknown")cpLog("auto-retry-output-unknown-message-only",{conversationId:cpConv(e),outputState:n,status:cpStatus(e),method:e?.method});let o=cpConv(e),i=cpTurnId(e)||cpOutputMap().get(o)?.turnId||"",s=cpRetryRound(e),a=n==="absent"?"rollback":s?.messageRetry&&s.messageTurnId&&s.messageTurnId===i?"edit-message":"message";if(a==="message"&&s?.messageRetry){cpLog("auto-retry-skip-message-turn-mismatch",{conversationId:o,turnId:i,expectedTurnId:s.messageTurnId||""});return false}let c=cpHost(e),l=cpModel(e),u=o+"|"+(i||cpRequestId(e)||cpMsg(e).slice(0,80))+"|"+cpStatus(e)+"|"+(e?.method||"")+"|"+a,f=Date.now(),p=globalThis.__codexpatchAutoRetryLast||(globalThis.__codexpatchAutoRetryLast=new Map),h=p.get(u);if(h&&f-h<3e4){cpLog("auto-retry-skip-duplicate",{key:u,mode:a});return true}for(let[e,r]of p)try{f-r>12e4&&p.delete(e)}catch(_){}let g={type:"codexpatch-auto-retry",hostId:c,conversationId:o,threadId:o,turnId:i,model:l||null,status:cpStatus(e),method:e?.method||"",reason:"stream_max_retries",mode:a,allowMessageRetry:a!=="rollback",hadTrackedOutput:n==="present",outputState:n,windowMs:3e4,at:f},m=globalThis.__codexpatchBroadcastToWebview,y=cpMsg(e);if(typeof m==="function"){let x=cpArmRetryRound(g);cpLog("auto-retry-arm",g);m(g);p.set(u,f);if(!x.notified)x.notified=true,cpNotify({source:"auto-retry",method:"codexpatch/auto-retry",conversationId:o,threadId:o,turnId:i,status:"retrying",kind:"retry",params:{...g,errorMessage:y}});else cpLog("auto-retry-notify-skip-round",{conversationId:o});return true}else cpLog("auto-retry-no-broadcast",g);return false}catch(r){cpLog("auto-retry-exception",{message:r?.message});return false}}
+function cpBody(e,r,n,o){let i=o==="retry"?"Codex 因错误中断，正在自动重试":o==="retry_response"?"Codex 自动重试后助手已回应":o==="approval"||cpAwaitingApprovalMethod(r)?"Codex 需要审批命令":e==="completed"?"Codex 任务已完成":"Codex 因错误中断，未执行自动重试";return n&&(o==="retry"||e==="failed"||e==="interrupted")?i+": "+String(n).slice(0,180):i}
+function cpTitle(e){return e==="approval"?"Codex 需要审批":e==="retry_response"?"Codex 自动重试":"Codex"}
+function cpNotify(e){try{let r=globalThis.__codexpatchSettings||{};if(r.notify===false){cpLog("notify-skip-disabled",e);return}let n=cpStatus(e),o=e?.kind||"",i=e?.method||"",s=cpAwaitingApprovalMethod(i),v=o==="retry",q=o==="retry_response";if(!s&&!v&&!q&&!cpFinal(n)){cpLog("notify-skip-not-supported",{status:n,kind:o,method:i});return}if(!s&&!v&&!q&&cpLooksUserInterrupted(e)){cpLog("notify-skip-user-interrupt",{status:n,method:i,msg:cpMsg(e)});return}let a=Date.now(),c=globalThis.__codexpatchNotifyLastByConversation||(globalThis.__codexpatchNotifyLastByConversation=new Map),l=cpConv(e),u=s?"approval":v?"retry":q?"retry_response":n,d=l+"|"+u+"|"+i+"|"+cpRequestId(e),f=c.get(d);if(f&&a-f<1e4){cpLog("notify-skip-duplicate",{key:d,status:n,kind:o});return}for(let[e,r]of c)try{a-r>12e4&&c.delete(e)}catch(_){}c.set(d,a);let p=cpMsg(e),h=cpTitle(u),g=cpBody(n,i,p,o),m=s||v||!q&&n!=="completed";cpLog("notify-send",{conversationId:l,status:n,kind:o,method:i,body:g});cpNotifyAdb(h,g,u);if(process.platform==="win32")try{let e=${JSON.stringify(WINDOWS_SYSTEM_NOTIFY_PS_V8)},r=cpMod(),o=r.path.join(r.os.tmpdir(),"codexpatch-notify.ps1");try{r.fs.writeFileSync(o,e,"utf8");cpLog("notify-script-written",{path:o,bytes:e.length})}catch(e){cpLog("notify-script-write-failed",{message:e?.message})}let n=r.cp.spawn("powershell.exe",["-NoProfile","-ExecutionPolicy","Bypass","-Sta","-File",o],{windowsHide:true,detached:false,stdio:["ignore","ignore","pipe"],env:{...process.env,CODEXPATCH_TITLE:h,CODEXPATCH_BODY:g,CODEXPATCH_ICON:m?"Warning":"Info",CODEXPATCH_EVENT:u,CODEXPATCH_AUMID:"vscodexkit.VSCode",CODEXPATCH_LOG_FILE:process.env.CODEXPATCH_LOG_FILE||r.path.join(r.os.tmpdir(),"codexpatch.log"),CODEXPATCH_SHORTCUT_TARGET:process.execPath,CODEXPATCH_SHORTCUT_ICON:process.execPath}});cpLog("notify-spawned",{pid:n.pid,event:u,file:o});n.stderr?.on?.("data",e=>cpLog("notify-stderr",{message:String(e).slice(0,500)}));n.on?.("exit",(e,r)=>cpLog("notify-exit",{code:e,signal:r,event:u}));n.on?.("error",e=>cpLog("notify-spawn-error",{message:e?.message}));return}catch(e){cpLog("notify-spawn-exception",{message:e?.message})}m?ut.window.showWarningMessage(g):ut.window.showInformationMessage(g)}catch(e){cpLog("notify-exception",{message:e?.message})}}
 function cpStart(e){try{let r=cpConv(typeof e==="string"?{conversationId:e}:e);(globalThis.__codexpatchActiveConversations||(globalThis.__codexpatchActiveConversations=new Set)).add(r);if(typeof e==="string")try{cpOutputMap().delete(r)}catch(_){}else cpRestartRetryRound(e);cpLog("conversation-start",{conversationId:r,source:e?.source,method:e?.method})}catch(_){}}
-function cpHandle(e){try{let r=cpStatus(e),n=e?.method||"";cpLog("observe",{source:e?.source,method:n,status:r,conversationId:cpConv(e),kind:e?.kind});if(r==="inProgress"){cpStart(e);return}if(cpFinal(r)&&!cpAuthoritativeEnd(e)){cpLog("notify-skip-nonauthoritative-final",{source:e?.source,method:n,status:r,conversationId:cpConv(e)});return}if(r==="completed"&&cpRetryRound(e)?.awaitingRestart){cpLog("notify-skip-stale-completed-during-retry",{conversationId:cpConv(e),method:n});return}let o=false;if(r==="failed"||n==="codex/event/stream_error"||n==="codex/event/error")o=cpRequestAutoRetry(e);if(o){cpLog("notify-skip-auto-retry",{conversationId:cpConv(e),status:r,method:n,msg:cpMsg(e)});return}if(cpFinal(r))cpClearRetryRound(e,r);if(cpFinal(r)||cpApproval(r)||e?.kind==="approval"||cpAwaitingUserMethod(n))cpNotify(e)}catch(n){cpLog("handle-exception",{message:n?.message})}}
+function cpNotifyRetryResponse(e){try{let r=cpConv(e),n=cpRetryRounds().get(r),o=cpTurnId(e);if(!n||n.responseNotified)return;if(n.awaitingRestart){if(!o||!n.sourceTurnId||o===n.sourceTurnId)return;n.awaitingRestart=false,n.activeTurnId=o,n.messageRetry&&(n.messageTurnId=o)}if(n.activeTurnId&&o&&o!==n.activeTurnId)return;n.responseNotified=true,n.at=Date.now(),cpLog("auto-retry-assistant-response",{conversationId:r,turnId:o||n.activeTurnId||""}),cpNotify({source:"assistant-output",method:e?.method||"item/agentMessage/delta",conversationId:r,threadId:r,turnId:o||n.activeTurnId||"",status:"inProgress",kind:"retry_response"})}catch(r){cpLog("auto-retry-response-notify-exception",{message:r?.message})}}
+function cpObserveNotification(e){try{let r=cpText(e?.method),n=e?.params||{},o=cpText(n.threadId)||cpText(n.conversationId)||"global",i=cpText(n.turn?.id)||cpText(n.turnId)||cpText(n.item?.turnId)||"";if(r==="turn/started"){cpStart({source:"notification",method:r,conversationId:o,threadId:o,turnId:i,status:"inProgress",params:n});return}let s=r==="item/agentMessage/delta"||r==="codex/event/agent_message"||r==="codex/event/agent_message_delta"||r==="codex/event/agent_message_content_delta",a=cpText(n.item?.type).toLowerCase();if(r==="item/completed"&&/agentmessage|assistant/.test(a))s=true;if(!s)return;let c=cpText(n.delta)||cpAssistantText(n.item||n);if(!c.trim()&&!cpObjHasAssistantOutput(n.item))return;cpNotifyRetryResponse({source:"notification",method:r,conversationId:o,threadId:o,turnId:i,params:n})}catch(r){cpLog("notification-observe-exception",{message:r?.message})}}
+function cpHandle(e){try{let r=cpStatus(e),n=e?.method||"",i=cpTurnId(e);cpLog("observe",{source:e?.source,method:n,status:r,conversationId:cpConv(e),turnId:i,kind:e?.kind});if(r==="inProgress"){cpStart(e);return}if(cpFinal(r)&&!cpAuthoritativeEnd(e)){cpLog("notify-skip-nonauthoritative-final",{source:e?.source,method:n,status:r,conversationId:cpConv(e)});return}let o=cpRetryRound(e);if(cpFinal(r)&&o?.awaitingRestart&&i&&o.sourceTurnId&&i!==o.sourceTurnId)o.awaitingRestart=false,o.activeTurnId=i,o.messageRetry&&(o.messageTurnId=i),o.at=Date.now(),cpLog("auto-retry-terminal-restart-observed",{conversationId:cpConv(e),turnId:i,sourceTurnId:o.sourceTurnId,status:r});if(cpFinal(r)&&o&&(o.awaitingRestart||!i||!o.activeTurnId||i!==o.activeTurnId)){cpLog(r==="completed"?"notify-skip-stale-completed-during-retry":"auto-retry-skip-unproven-terminal",{conversationId:cpConv(e),method:n,status:r,turnId:i,sourceTurnId:o.sourceTurnId||"",activeTurnId:o.activeTurnId||"",awaitingRestart:o.awaitingRestart===true});return}let s=false;if(r==="failed"||n==="codex/event/stream_error"||n==="codex/event/error")s=cpRequestAutoRetry(e);if(s){cpLog("notify-skip-auto-retry",{conversationId:cpConv(e),status:r,method:n,msg:cpMsg(e)});return}if(cpFinal(r))cpClearRetryRound(e,r);if(cpFinal(r)||cpApproval(r)||e?.kind==="approval"||cpAwaitingUserMethod(n))cpNotify(e)}catch(n){cpLog("handle-exception",{message:n?.message})}}
 function cpPath(e){return Array.isArray(e)?e.map(cpText):typeof e==="string"?e.split(/[./]/):[]}
 function cpPathLooksTurn(e){let r=cpPath(e);return r.some(e=>e==="turn"||e==="turns"||e==="conversationTurns"||e==="visibleTurnEntries"||e==="turnHistory"||e==="latestTurn")}
 function cpFindStatus(e,r){if(r>7||e==null)return"";if(typeof e==="string")return cpFinal(e)||e==="inProgress"?e:"";if(typeof e!=="object")return"";if(typeof e.status==="string"&&(cpFinal(e.status)||e.status==="inProgress"))return e.status;if(Array.isArray(e)){for(let n=e.length-1;n>=0;n--){let o=cpFindStatus(e[n],r+1);if(o)return o}return""}for(let n of["turn","value","conversationState","latestTurn","entry","payload"]){let o=cpFindStatus(e[n],r+1);if(o)return o}return""}
@@ -376,7 +378,7 @@ globalThis.__codexpatchMarkUserInterrupt=cpMarkUserInterrupt;
 globalThis.__codexpatchObserveAppServerRequest=cpObserveAppServerRequest;
 globalThis.__codexpatchObserveThreadStreamState=e=>{try{cpRememberAssistantOutput(e);cpObserveStreamFinalForRetry(e);let r=cpStreamInfo(e);if(r.status==="inProgress")cpHandle({source:"thread-stream-state",method:"thread-stream-state-changed",conversationId:e?.conversationId,threadId:e?.conversationId,status:r.status,params:e,snapshot:r.snapshot})}catch(r){cpLog("stream-observe-exception",{message:r?.message})}};
 cpLog("loaded",{version:${JSON.stringify(VERSION)}});
-return d.registerInternalNotificationHandler(Re=>{if(Re.method==="turn/completed"){E.emit("turnComplete");try{let e=Re.params||{},r=e.turn||{};cpHandle({source:"turn-completed",method:Re.method,conversationId:e.threadId,threadId:e.threadId,turnId:r.id,status:r.status,error:r.error,params:e})}catch(e){cpLog("turn-completed-exception",{message:e?.message})}}});
+return d.registerInternalNotificationHandler(Re=>{try{cpObserveNotification(Re)}catch(e){cpLog("notification-observe-exception",{message:e?.message})}if(Re.method==="turn/completed"){E.emit("turnComplete");try{let e=Re.params||{},r=e.turn||{};cpHandle({source:"turn-completed",method:Re.method,conversationId:e.threadId,threadId:e.threadId,turnId:r.id,status:r.status,error:r.error,params:e})}catch(e){cpLog("turn-completed-exception",{message:e?.message})}}});
 })());`;
 
 const MCP_LIFECYCLE_ANCHOR =
@@ -390,11 +392,17 @@ const APP_SERVER_REQUEST_PATTERN =
 
 const THREAD_STREAM_STATE_PATTERN = /case"thread-stream-state-changed":\{/;
 
+const THREAD_STREAM_STATE_DISPATCH_PATTERN =
+  /case"thread-stream-state-changed":await (?<receiver>[A-Za-z_$][\w$]*)\.threadStreamStateChanged\(\{sourceClientId:(?<event>[A-Za-z_$][\w$]*)\.sourceClientId,params:\k<event>\.params\}\);return;/;
+
 const USER_INTERRUPT_ANCHOR =
   'c=r.addRequestHandler("thread-follower-interrupt-turn",async x=>await this.getThreadRole(e,x.conversationId)==="owner",async x=>this.handleThreadFollowerInterruptTurnRequest(e,x.requestId,x.params)),';
 
 const USER_INTERRUPT_PATCH =
   'c=r.addRequestHandler("thread-follower-interrupt-turn",async x=>await this.getThreadRole(e,x.conversationId)==="owner",async x=>(globalThis.__codexpatchMarkUserInterrupt?.({source:"thread-follower",method:"thread-follower-interrupt-turn",conversationId:x.conversationId,requestId:x.requestId,params:x.params}),this.handleThreadFollowerInterruptTurnRequest(e,x.requestId,x.params))),/* codexpatch:v1:user-interrupt-suppress */';
+
+const USER_INTERRUPT_GENERIC_PATTERN =
+  /(?<register>[A-Za-z_$][\w$]*)=\((?<method>[A-Za-z_$][\w$]*),(?<timeout>[A-Za-z_$][\w$]*)=(?<defaultTimeout>[A-Za-z_$][\w$]*)\)=>(?<ipcClient>[A-Za-z_$][\w$]*)\.addRequestHandler\(\k<method>,(?<ownerCheck>[A-Za-z_$][\w$]*),\(\{params:(?<params>[A-Za-z_$][\w$]*)\}\)=>(?<forward>[A-Za-z_$][\w$]*)\((?<viewService>[A-Za-z_$][\w$]*),(?<hostId>[A-Za-z_$][\w$]*),\{method:\k<method>,params:\k<params>\},\k<timeout>\)\)/;
 
 const HOST_MESSAGE_ANCHOR =
   'switch(r.type){case"ready":break;case"persisted-atom-sync-request":';
@@ -636,8 +644,8 @@ function buildNotificationHandler(options, identifiers) {
   return handler
     .replace("e.push((()=>{", `${subscriptions}.push((()=>{`)
     .replace(
-      'return d.registerInternalNotificationHandler(Re=>{if(Re.method==="turn/completed"){E.emit("turnComplete");try{let e=Re.params||{},r=e.turn||{};cpHandle({source:"turn-completed",method:Re.method,conversationId:e.threadId,threadId:e.threadId,turnId:r.id,status:r.status,error:r.error,params:e})}catch(e){cpLog("turn-completed-exception",{message:e?.message})}}});',
-      `return ${connection}.registerInternalNotificationHandler(${notification}=>{if(${notification}.method==="turn/completed"){${eventEmitter}.emit("turnComplete");try{let e=${notification}.params||{},r=e.turn||{};cpHandle({source:"turn-completed",method:${notification}.method,conversationId:e.threadId,threadId:e.threadId,turnId:r.id,status:r.status,error:r.error,params:e})}catch(e){cpLog("turn-completed-exception",{message:e?.message})}}});`
+      'return d.registerInternalNotificationHandler(Re=>{try{cpObserveNotification(Re)}catch(e){cpLog("notification-observe-exception",{message:e?.message})}if(Re.method==="turn/completed"){E.emit("turnComplete");try{let e=Re.params||{},r=e.turn||{};cpHandle({source:"turn-completed",method:Re.method,conversationId:e.threadId,threadId:e.threadId,turnId:r.id,status:r.status,error:r.error,params:e})}catch(e){cpLog("turn-completed-exception",{message:e?.message})}}});',
+      `return ${connection}.registerInternalNotificationHandler(${notification}=>{try{cpObserveNotification(${notification})}catch(e){cpLog("notification-observe-exception",{message:e?.message})}if(${notification}.method==="turn/completed"){${eventEmitter}.emit("turnComplete");try{let e=${notification}.params||{},r=e.turn||{};cpHandle({source:"turn-completed",method:${notification}.method,conversationId:e.threadId,threadId:e.threadId,turnId:r.id,status:r.status,error:r.error,params:e})}catch(e){cpLog("turn-completed-exception",{message:e?.message})}}});`
     );
 }
 
@@ -658,6 +666,9 @@ const APP_MAIN_FOLLOWER_INTERRUPT_PATTERN =
 
 const APP_MAIN_AUTO_RETRY_PATTERN =
   /(case`ipc-broadcast`:(?<event>[A-Za-z_$][\w$]*)\.method===`automation-capability-event`&&\k<event>\.sourceClientId===`desktop`&&\k<event>\.version===[A-Za-z_$][\w$]*\(`automation-capability-event`\)&&[A-Za-z_$][\w$]*\([A-Za-z_$][\w$]*,[A-Za-z_$][\w$]*\.getForHostId\(\k<event>\.params\.hostId\),\k<event>\.params\),[A-Za-z_$][\w$]*\(\{claimAppConnectOAuthCallback:[A-Za-z_$][\w$]*,isCompactWindow:[A-Za-z_$][\w$]*,message:\k<event>,navigate:[A-Za-z_$][\w$]*,queryClient:[A-Za-z_$][\w$]*\}\);break (?<label>bb\d+);)(case`thread-follower-start-turn-request`:try\{let (?<result>[A-Za-z_$][\w$]*)=await (?<request>[A-Za-z_$][\w$]*)\(`thread-follower-start-turn-for-host`,\{hostId:\k<event>\.hostId,\.\.\.\k<event>\.params\}\);(?<dispatch>[A-Za-z_$][\w$]*)\.dispatchMessage\(`thread-follower-start-turn-response`,\{requestId:\k<event>\.requestId,result:\k<result>\}\))/;
+
+const APP_MAIN_AUTO_RETRY_MESSAGE_SWITCH_PATTERN =
+  /(?<request>[A-Za-z_$][\w$]*)\(`handle-app-server-notification-for-host`,\{hostId:(?<notification>[A-Za-z_$][\w$]*)\.hostId,notification:\{method:\k<notification>\.method,params:\k<notification>\.params\}\}\)\},(?<handler>[A-Za-z_$][\w$]*)=async (?<event>[A-Za-z_$][\w$]*)=>\{if\(![A-Za-z_$][\w$]*\(\k<event>\)\)(?<label>bb\d+):switch\(\k<event>\.type\)\{(?<firstCase>case`worker-response`:case`worker-event`:break \k<label>;)/;
 
 function patchNotificationRegistration(source, options) {
   return replaceExactlyOnceByPattern(
@@ -687,13 +698,64 @@ function patchAppServerRequest(source) {
 }
 
 function patchThreadStreamState(source) {
-  return replaceExactlyOnceByPattern(
-    source,
-    THREAD_STREAM_STATE_PATTERN,
-    () =>
-      `case"thread-stream-state-changed":{/* ${MARKERS.threadStreamState} */try{globalThis.__codexpatchBroadcastToWebview=O=>{try{this.broadcastToAllViews(O)}catch(e){globalThis.__codexpatchLog?.("broadcast-exception",{message:e?.message})}};globalThis.__codexpatchObserveThreadStreamState?.(r)}catch(_){}`,
-    "thread stream state anchor in clean baseline"
-  );
+  const legacyMatches = findPatternMatches(source, THREAD_STREAM_STATE_PATTERN);
+  const currentMatches = findPatternMatches(source, THREAD_STREAM_STATE_DISPATCH_PATTERN);
+  if (legacyMatches.length + currentMatches.length !== 1) {
+    throw new Error(
+      `Expected exactly one thread stream state anchor in clean baseline, found ${legacyMatches.length + currentMatches.length}.`
+    );
+  }
+  if (legacyMatches.length === 1) {
+    const match = legacyMatches[0];
+    const replacement =
+      `case"thread-stream-state-changed":{/* ${MARKERS.threadStreamState} */` +
+      'try{globalThis.__codexpatchBroadcastToWebview=O=>{try{this.broadcastToAllViews(O)}catch(e){globalThis.__codexpatchLog?.("broadcast-exception",{message:e?.message})}};globalThis.__codexpatchObserveThreadStreamState?.(r)}catch(_){}';
+    return source.slice(0, match.index) + replacement + source.slice(match.index + match[0].length);
+  }
+
+  const match = currentMatches[0];
+  const { receiver, event } = match.groups;
+  const replacement =
+    `case"thread-stream-state-changed":{/* ${MARKERS.threadStreamState} */` +
+    `try{globalThis.__codexpatchObserveThreadStreamState?.(${event}.params)}catch(error){` +
+    'globalThis.__codexpatchLog?.("stream-observe-dispatch-exception",{message:error?.message})}' +
+    `await ${receiver}.threadStreamStateChanged({sourceClientId:${event}.sourceClientId,params:${event}.params});return}`;
+  return source.slice(0, match.index) + replacement + source.slice(match.index + match[0].length);
+}
+
+function patchHostUserInterrupt(source) {
+  const legacyCount = countOccurrences(source, USER_INTERRUPT_ANCHOR);
+  const currentMatches = findPatternMatches(source, USER_INTERRUPT_GENERIC_PATTERN);
+  if (legacyCount + currentMatches.length !== 1) {
+    throw new Error(
+      `Expected exactly one user interrupt anchor in clean baseline, found ${legacyCount + currentMatches.length}.`
+    );
+  }
+  if (legacyCount === 1) {
+    return source.replace(USER_INTERRUPT_ANCHOR, USER_INTERRUPT_PATCH);
+  }
+
+  const match = currentMatches[0];
+  const {
+    register,
+    method,
+    timeout,
+    defaultTimeout,
+    ipcClient,
+    ownerCheck,
+    params,
+    forward,
+    viewService,
+    hostId
+  } = match.groups;
+  const replacement =
+    `${register}=(${method},${timeout}=${defaultTimeout})=>${ipcClient}.addRequestHandler(` +
+    `${method},${ownerCheck},({params:${params}})=>(${method}===\`thread-follower-interrupt-turn\`&&` +
+    `globalThis.__codexpatchMarkUserInterrupt?.({source:"thread-follower",method:${method},` +
+    `conversationId:${params}.conversationId,params:${params}}),` +
+    `${forward}(${viewService},${hostId},{method:${method},params:${params}},${timeout})))` +
+    `/* ${MARKERS.userInterrupt} */`;
+  return source.slice(0, match.index) + replacement + source.slice(match.index + match[0].length);
 }
 
 function patchAppMainInterrupt(source) {
@@ -753,23 +815,39 @@ function patchAppMainRetryCommands(source, plan) {
 }
 
 function patchAppMainAutoRetry(source) {
-  return replaceExactlyOnceByPattern(
-    source,
-    APP_MAIN_AUTO_RETRY_PATTERN,
-    (match) => {
-      const { event, label, request, dispatch } = match.groups;
-      const patch =
-        'case`codexpatch-auto-retry`:{/* codexpatch:v7:webview-auto-retry-message-reuse */try{let t=CP_EVENT.conversationId??CP_EVENT.threadId,n=CP_EVENT.turnId,o=CP_EVENT.model??null,i=CP_EVENT.mode??`rollback`,a=CP_EVENT.allowMessageRetry===!0&&(i===`message`||i===`edit-message`);if(i===`rollback`&&CP_EVENT.hadTrackedOutput!==!1){CP_DISPATCH.dispatchMessage(`codexpatch-diagnostic`,{event:`auto-retry-send-skip-output-boundary`,conversationId:t||``,turnId:n||``,outputState:CP_EVENT.outputState||`unknown`});break CP_LABEL}if(i!==`rollback`&&!a){CP_DISPATCH.dispatchMessage(`codexpatch-diagnostic`,{event:`auto-retry-send-skip-message-boundary`,conversationId:t||``,turnId:n||``,mode:i});break CP_LABEL}if(!t||!a&&!n){CP_DISPATCH.dispatchMessage(`codexpatch-diagnostic`,{event:`auto-retry-send-skip-missing-context`,conversationId:t||``,turnId:n||``,mode:i});break CP_LABEL}let s=globalThis.__codexpatchRetrySent||(globalThis.__codexpatchRetrySent=new Map),c=t+`|`+(n||`latest`)+`|`+i,l=Date.now(),u=s.get(c);if(u&&l-u<3e4){CP_DISPATCH.dispatchMessage(`codexpatch-diagnostic`,{event:`auto-retry-send-skip-duplicate`,conversationId:t,turnId:n,mode:i});break CP_LABEL}for(let[e,t]of s)try{l-t>12e4&&s.delete(e)}catch{}s.set(c,l);try{let r=`codexpatch:auto-retry:`+c,a=localStorage.getItem(r),d=a?Number(a.split(`:`)[0]):0;if(d&&l-d<3e4){CP_DISPATCH.dispatchMessage(`codexpatch-diagnostic`,{event:`auto-retry-send-skip-shared-duplicate`,conversationId:t,turnId:n,mode:i});break CP_LABEL}let f=l+`:`+Math.random().toString(36).slice(2);localStorage.setItem(r,f);await new Promise(e=>setTimeout(e,30));if(localStorage.getItem(r)!==f){CP_DISPATCH.dispatchMessage(`codexpatch-diagnostic`,{event:`auto-retry-send-skip-shared-lost`,conversationId:t,turnId:n,mode:i});break CP_LABEL}}catch{}let f=i===`edit-message`?`thread-follower-edit-last-user-turn-for-host`:a?`codexpatch-send-retry-message-for-host`:`codexpatch-retry-turn-for-host`,p={hostId:CP_EVENT.hostId??`local`,conversationId:t,turnId:n,model:o,text:CP_EVENT.retryText??`retry`};i===`edit-message`&&(p={hostId:p.hostId,conversationId:t,turnId:n,message:p.text});CP_DISPATCH.dispatchMessage(`codexpatch-diagnostic`,{event:i===`edit-message`?`auto-retry-message-edit`:a?`auto-retry-message-send`:`auto-retry-send`,conversationId:t,turnId:n,model:o||``});await CP_REQUEST(f,p);CP_DISPATCH.dispatchMessage(`codexpatch-diagnostic`,{event:i===`edit-message`?`auto-retry-message-edit-ok`:a?`auto-retry-message-send-ok`:`auto-retry-send-ok`,conversationId:t,turnId:n})}catch(t){CP_DISPATCH.dispatchMessage(`codexpatch-diagnostic`,{event:`auto-retry-send-error`,conversationId:CP_EVENT.conversationId||CP_EVENT.threadId||``,message:String(t).slice(0,500)})}break CP_LABEL}';
-      return (
-        patch
-          .replaceAll("CP_EVENT", event)
-          .replaceAll("CP_LABEL", label)
-          .replaceAll("CP_DISPATCH", dispatch)
-          .replaceAll("CP_REQUEST", request) + match[0]
-      );
-    },
-    "webview auto retry message anchor in clean baseline"
-  );
+  const legacyMatches = findPatternMatches(source, APP_MAIN_AUTO_RETRY_PATTERN);
+  const currentMatches = findPatternMatches(source, APP_MAIN_AUTO_RETRY_MESSAGE_SWITCH_PATTERN);
+  if (legacyMatches.length + currentMatches.length !== 1) {
+    throw new Error(
+      `Expected exactly one webview auto retry message anchor in clean baseline, found ${legacyMatches.length + currentMatches.length}.`
+    );
+  }
+  if (legacyMatches.length === 1) {
+    const match = legacyMatches[0];
+    const { event, label, request, dispatch } = match.groups;
+    const patch =
+      'case`codexpatch-auto-retry`:{/* codexpatch:v7:webview-auto-retry-message-reuse */try{let t=CP_EVENT.conversationId??CP_EVENT.threadId,n=CP_EVENT.turnId,o=CP_EVENT.model??null,i=CP_EVENT.mode??`rollback`,a=CP_EVENT.allowMessageRetry===!0&&(i===`message`||i===`edit-message`);if(i===`rollback`&&CP_EVENT.hadTrackedOutput!==!1){CP_DISPATCH.dispatchMessage(`codexpatch-diagnostic`,{event:`auto-retry-send-skip-output-boundary`,conversationId:t||``,turnId:n||``,outputState:CP_EVENT.outputState||`unknown`});break CP_LABEL}if(i!==`rollback`&&!a){CP_DISPATCH.dispatchMessage(`codexpatch-diagnostic`,{event:`auto-retry-send-skip-message-boundary`,conversationId:t||``,turnId:n||``,mode:i});break CP_LABEL}if(!t||!a&&!n){CP_DISPATCH.dispatchMessage(`codexpatch-diagnostic`,{event:`auto-retry-send-skip-missing-context`,conversationId:t||``,turnId:n||``,mode:i});break CP_LABEL}let s=globalThis.__codexpatchRetrySent||(globalThis.__codexpatchRetrySent=new Map),c=t+`|`+(n||`latest`)+`|`+i,l=Date.now(),u=s.get(c);if(u&&l-u<3e4){CP_DISPATCH.dispatchMessage(`codexpatch-diagnostic`,{event:`auto-retry-send-skip-duplicate`,conversationId:t,turnId:n,mode:i});break CP_LABEL}for(let[e,t]of s)try{l-t>12e4&&s.delete(e)}catch{}s.set(c,l);try{let r=`codexpatch:auto-retry:`+c,a=localStorage.getItem(r),d=a?Number(a.split(`:`)[0]):0;if(d&&l-d<3e4){CP_DISPATCH.dispatchMessage(`codexpatch-diagnostic`,{event:`auto-retry-send-skip-shared-duplicate`,conversationId:t,turnId:n,mode:i});break CP_LABEL}let f=l+`:`+Math.random().toString(36).slice(2);localStorage.setItem(r,f);await new Promise(e=>setTimeout(e,30));if(localStorage.getItem(r)!==f){CP_DISPATCH.dispatchMessage(`codexpatch-diagnostic`,{event:`auto-retry-send-skip-shared-lost`,conversationId:t,turnId:n,mode:i});break CP_LABEL}}catch{}let f=i===`edit-message`?`thread-follower-edit-last-user-turn-for-host`:a?`codexpatch-send-retry-message-for-host`:`codexpatch-retry-turn-for-host`,p={hostId:CP_EVENT.hostId??`local`,conversationId:t,turnId:n,model:o,text:CP_EVENT.retryText??`retry`};i===`edit-message`&&(p={hostId:p.hostId,conversationId:t,turnId:n,message:p.text});CP_DISPATCH.dispatchMessage(`codexpatch-diagnostic`,{event:i===`edit-message`?`auto-retry-message-edit`:a?`auto-retry-message-send`:`auto-retry-send`,conversationId:t,turnId:n,model:o||``});await CP_REQUEST(f,p);CP_DISPATCH.dispatchMessage(`codexpatch-diagnostic`,{event:i===`edit-message`?`auto-retry-message-edit-ok`:a?`auto-retry-message-send-ok`:`auto-retry-send-ok`,conversationId:t,turnId:n})}catch(t){CP_DISPATCH.dispatchMessage(`codexpatch-diagnostic`,{event:`auto-retry-send-error`,conversationId:CP_EVENT.conversationId||CP_EVENT.threadId||``,message:String(t).slice(0,500)})}break CP_LABEL}';
+    const replacement =
+      patch
+        .replaceAll("CP_EVENT", event)
+        .replaceAll("CP_LABEL", label)
+        .replaceAll("CP_DISPATCH", dispatch)
+        .replaceAll("CP_REQUEST", request) + match[0];
+    return source.slice(0, match.index) + replacement + source.slice(match.index + match[0].length);
+  }
+
+  const match = currentMatches[0];
+  const { event, label, request, firstCase } = match.groups;
+  const patch =
+    'case`codexpatch-auto-retry`:{/* codexpatch:v7:webview-auto-retry-message-reuse */try{let conversationId=CP_EVENT.conversationId??CP_EVENT.threadId,turnId=CP_EVENT.turnId,model=CP_EVENT.model??null,mode=CP_EVENT.mode??`rollback`,allowMessage=CP_EVENT.allowMessageRetry===!0&&(mode===`message`||mode===`edit-message`);if(mode===`rollback`&&CP_EVENT.hadTrackedOutput!==!1)break CP_LABEL;if(mode!==`rollback`&&!allowMessage)break CP_LABEL;if(!conversationId||!allowMessage&&!turnId)break CP_LABEL;let sent=globalThis.__codexpatchRetrySent||(globalThis.__codexpatchRetrySent=new Map),key=conversationId+`|`+(turnId||`latest`)+`|`+mode,now=Date.now(),last=sent.get(key);if(last&&now-last<3e4)break CP_LABEL;for(let[e,t]of sent)try{now-t>12e4&&sent.delete(e)}catch{}sent.set(key,now);let command=mode===`edit-message`?`thread-follower-edit-last-user-turn-for-host`:allowMessage?`codexpatch-send-retry-message-for-host`:`codexpatch-retry-turn-for-host`,params={hostId:CP_EVENT.hostId??`local`,conversationId,turnId,model,text:CP_EVENT.retryText??`retry`};mode===`edit-message`&&(params={hostId:params.hostId,conversationId,turnId,message:params.text});await CP_REQUEST(command,params)}catch(error){console.error(`[codexpatch] auto retry failed`,error)}break CP_LABEL}';
+  const replacement =
+    match[0].slice(0, match[0].length - firstCase.length) +
+    patch
+      .replaceAll("CP_EVENT", event)
+      .replaceAll("CP_LABEL", label)
+      .replaceAll("CP_REQUEST", request) +
+    firstCase;
+  return source.slice(0, match.index) + replacement + source.slice(match.index + match[0].length);
 }
 
 function main() {
@@ -1225,9 +1303,13 @@ function getPatchStatus(files) {
     appServerRequestPatched: extensionSource.includes(MARKERS.appServerRequest),
     appServerRequestAnchorCount: countPatternMatches(extensionSource, APP_SERVER_REQUEST_PATTERN),
     threadStreamStatePatched: extensionSource.includes(MARKERS.threadStreamState),
-    threadStreamStateAnchorCount: countPatternMatches(extensionSource, THREAD_STREAM_STATE_PATTERN),
+    threadStreamStateAnchorCount:
+      countPatternMatches(extensionSource, THREAD_STREAM_STATE_PATTERN) +
+      countPatternMatches(extensionSource, THREAD_STREAM_STATE_DISPATCH_PATTERN),
     userInterruptPatched: extensionSource.includes(MARKERS.userInterrupt),
-    userInterruptAnchorCount: countOccurrences(extensionSource, USER_INTERRUPT_ANCHOR),
+    userInterruptAnchorCount:
+      countOccurrences(extensionSource, USER_INTERRUPT_ANCHOR) +
+      countPatternMatches(extensionSource, USER_INTERRUPT_GENERIC_PATTERN),
     webviewUserInterruptPatched: appMainSource.includes(MARKERS.webviewUserInterrupt),
     webviewInterruptAnchorCount: countPatternMatches(appMainSource, APP_MAIN_INTERRUPT_PATTERN),
     webviewFollowerInterruptAnchorCount: countPatternMatches(
@@ -1523,12 +1605,7 @@ function applyPatch(extensionDir, manifest, files, options) {
     MCP_LIFECYCLE_PATCH,
     "MCP lifecycle anchor in clean baseline"
   );
-  const extensionSourceWithUserInterrupt = replaceExactlyOnce(
-    extensionSourceWithLifecycle,
-    USER_INTERRUPT_ANCHOR,
-    USER_INTERRUPT_PATCH,
-    "user interrupt anchor in clean baseline"
-  );
+  const extensionSourceWithUserInterrupt = patchHostUserInterrupt(extensionSourceWithLifecycle);
   const extensionSource = patchThreadStreamState(extensionSourceWithUserInterrupt);
   const indexSource = patchWebviewIndex(baseline.indexSource);
   const appMainWithInterrupt = patchAppMainInterrupt(baseline.appMainSource);
@@ -1749,6 +1826,7 @@ module.exports = {
   patchAppMainInterrupt,
   patchAppMainRetryCommands,
   patchAppServerRequest,
+  patchHostUserInterrupt,
   patchNotificationRegistration,
   patchThreadStreamState
 };
