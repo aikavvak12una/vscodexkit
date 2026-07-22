@@ -15,6 +15,7 @@ const {
   patchAppMainFollowerInterrupt,
   patchAppMainInterrupt,
   patchAppMainRetryCommands,
+  patchAppServerManagerSignals,
   patchHostUserInterrupt,
   patchNotificationRegistration,
   patchThreadStreamState
@@ -69,6 +70,22 @@ test("fails closed when app-main discovery is ambiguous", (t) => {
   assert.throws(() => findWebviewAppMain(extensionDir), /multiple candidate webview app bundles/);
 });
 
+test("bridges the authoritative turn completion payload from the app-server manager", () => {
+  const source =
+    "this.events.emitTurnCompleted({conversationId:r,hostId:this.hostId,status:t.status," +
+    "turnId:t.id,lastAgentMessage:s,heartbeatAssistantMessage:c," +
+    "automationNotificationDecision:l,hasPendingContinuation:m,restoredQueuedFollowUps:h})";
+  const patched = patchAppServerManagerSignals(source);
+
+  assert.match(patched, /codexpatch:v1:authoritative-turn-completed/);
+  assert.match(patched, /this\.dispatchMessageFromView\(`codexpatch-turn-completed`/);
+  assert.match(patched, /hasPendingContinuation:m/);
+  assert.match(patched, /isSubagent:/);
+  assert.match(patched, /parentThreadId/);
+  assert.match(patched, /subAgent/);
+  assert.match(patched, /this\.events\.emitTurnCompleted/);
+});
+
 test("preserves current notification callback identifiers", () => {
   const source =
     'items.push(connection.registerInternalNotificationHandler(notification=>{notification.method==="turn/completed"&&events.emit("turnComplete")}));';
@@ -77,15 +94,15 @@ test("preserves current notification callback identifiers", () => {
     autoRetry: true
   });
 
-  assert.match(patched, /codexpatch:v22:notification-types/);
+  assert.match(patched, /codexpatch:v26:authoritative-turn-boundaries/);
   assert.match(patched, /return connection\.registerInternalNotificationHandler\(notification=>/);
   assert.match(patched, /events\.emit\("turnComplete"\)/);
-  assert.match(patched, /cpNotifyAdb\(h,g,u\)/);
+  assert.match(patched, /cpNotifyAdb\(m,y,f\)/);
   assert.match(patched, /kind:"retry",params:\{\.\.\.g,errorMessage:y\}/);
   assert.match(patched, /if\(!x\.notified\)x\.notified=true,cpNotify/);
   assert.match(patched, /Codex 因错误中断，未执行自动重试/);
   assert.match(patched, /Codex 自动重试后助手已回应/);
-  assert.match(patched, /Codex 需要审批命令/);
+  assert.match(patched, /Codex 需要审批/);
   assert.match(patched, /cpObserveNotification\(notification\)/);
   assert.match(patched, /notify-skip-stale-completed-during-retry/);
   assert.match(patched, /cpRestartRetryRound\(e\)/);
@@ -104,6 +121,213 @@ test("preserves current notification callback identifiers", () => {
   assert.match(patched, /a=n===\"absent\"\?\"rollback\"/);
   assert.match(patched, /\"edit-message\":\"message\"/);
   assert.doesNotMatch(patched, /return d\.registerInternalNotificationHandler\(Re=>/);
+});
+
+test("reports only an attributable final turn with no pending continuation", () => {
+  const { context, logLines } = makeNotificationRuntime();
+  const send = (method, turnId, status) =>
+    context.items[0]({
+      method,
+      params: {
+        threadId: "authoritative-completion",
+        turn: { id: turnId, status }
+      }
+    });
+  const completedNotifications = () =>
+    logLines.filter(
+      (line) => line.includes(" notify-send ") && line.includes('"status":"completed"')
+    ).length;
+
+  send("turn/started", "turn-1", "inProgress");
+  send("turn/completed", "turn-1", "completed");
+  assert.equal(completedNotifications(), 0);
+
+  context.__codexpatchObserveRichTurnCompleted({
+    conversationId: "authoritative-completion",
+    turnId: "turn-1",
+    status: "completed",
+    hasPendingContinuation: true,
+    isSubagent: false
+  });
+  assert.equal(completedNotifications(), 0);
+
+  context.__codexpatchObserveRichTurnCompleted({
+    conversationId: "child-conversation",
+    turnId: "child-turn",
+    status: "completed",
+    hasPendingContinuation: false,
+    isSubagent: true
+  });
+  assert.equal(completedNotifications(), 0);
+
+  context.__codexpatchObserveRichTurnCompleted({
+    conversationId: "authoritative-completion",
+    turnId: "turn-1",
+    status: "completed",
+    hasPendingContinuation: false,
+    isSubagent: false
+  });
+  assert.equal(completedNotifications(), 1);
+
+  context.__codexpatchObserveRichTurnCompleted({
+    conversationId: "authoritative-completion",
+    turnId: "turn-1",
+    status: "completed",
+    hasPendingContinuation: false,
+    isSubagent: false
+  });
+  assert.equal(completedNotifications(), 1);
+});
+
+test("does not let legacy MCP task completion bypass the rich completion boundary", () => {
+  const { context, logLines } = makeNotificationRuntime();
+  const completedNotifications = () =>
+    logLines.filter(
+      (line) => line.includes(" notify-send ") && line.includes('"status":"completed"')
+    ).length;
+
+  context.__codexpatchNotifyConversationEnd({
+    source: "mcp",
+    method: "codex/event/task_complete",
+    conversationId: "legacy-completion",
+    status: "completed",
+    params: { conversationId: "legacy-completion" }
+  });
+  assert.equal(completedNotifications(), 0);
+
+  context.__codexpatchObserveRichTurnCompleted({
+    conversationId: "legacy-completion",
+    turnId: "turn-1",
+    status: "completed",
+    hasPendingContinuation: false,
+    isSubagent: false
+  });
+  assert.equal(completedNotifications(), 1);
+});
+
+test("notifies a user interruption exactly once without automatically retrying", () => {
+  const { context, logLines, retries } = makeNotificationRuntime();
+  context.__codexpatchMarkUserInterrupt({
+    conversationId: "user-interruption",
+    turnId: "turn-1",
+    requestId: "interrupt-1"
+  });
+  context.items[0]({
+    method: "turn/started",
+    params: {
+      threadId: "user-interruption",
+      turn: { id: "turn-1", status: "inProgress" }
+    }
+  });
+  context.items[0]({
+    method: "turn/completed",
+    params: {
+      threadId: "user-interruption",
+      turn: { id: "turn-1", status: "interrupted" }
+    }
+  });
+  assert.equal(logLines.filter((line) => line.includes(" notify-send ")).length, 0);
+
+  context.__codexpatchObserveRichTurnCompleted({
+    conversationId: "user-interruption",
+    turnId: "turn-1",
+    status: "interrupted",
+    hasPendingContinuation: false,
+    isSubagent: false
+  });
+  context.__codexpatchObserveRichTurnCompleted({
+    conversationId: "user-interruption",
+    turnId: "turn-1",
+    status: "interrupted",
+    hasPendingContinuation: false,
+    isSubagent: false
+  });
+
+  const sent = logLines
+    .filter((line) => line.includes(" notify-send "))
+    .map((line) => JSON.parse(line.slice(line.indexOf("{"))));
+  assert.equal(retries.length, 0);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].status, "interrupted");
+  assert.equal(sent[0].body, "Codex 对话已中断");
+});
+
+test("reports each goal attention state once", () => {
+  const { context, logLines } = makeNotificationRuntime();
+  const states = [
+    ["paused", "Codex 任务已暂停"],
+    ["blocked", "Codex 任务已阻塞，需要处理"],
+    ["budgetLimited", "Codex 任务因预算限制暂停"],
+    ["usageLimited", "Codex 任务因用量限制暂停"]
+  ];
+
+  states.forEach(([status], index) => {
+    const event = {
+      method: "thread/goal/updated",
+      params: {
+        threadId: `goal-${status}`,
+        goal: { status, updatedAt: index + 1 }
+      }
+    };
+    context.items[0](event);
+    context.items[0](event);
+  });
+
+  const sent = logLines
+    .filter((line) => line.includes(" notify-send "))
+    .map((line) => JSON.parse(line.slice(line.indexOf("{"))));
+  assert.equal(sent.length, states.length);
+  states.forEach(([, body]) => {
+    assert.equal(sent.filter((entry) => entry.body === body).length, 1);
+  });
+});
+
+test("covers every current approval and user-input request boundary", () => {
+  const { context, logLines } = makeNotificationRuntime();
+  const requests = [
+    ["item/commandExecution/requestApproval", {}],
+    ["item/fileChange/requestApproval", {}],
+    ["item/permissions/requestApproval", {}],
+    ["item/tool/requestUserInput", {}],
+    ["item/tool/requestOptionPicker", {}],
+    ["item/tool/requestSetupCodexContextPicker", {}],
+    ["item/plan/requestImplementation", {}],
+    ["mcpServer/elicitation/request", {}],
+    ["item/tool/call", { tool: "request_option_picker" }],
+    ["item/tool/call", { tool: "request_onboarding_input" }],
+    ["item/tool/call", { tool: "setup_codex_context_picker" }],
+    ["item/tool/call", { tool: "setup_codex_step", arguments: { step: "workspace" } }]
+  ];
+
+  requests.forEach(([method, extra], index) => {
+    context.__codexpatchObserveAppServerRequest({
+      method,
+      id: `request-${index}`,
+      params: {
+        threadId: "approval-matrix",
+        turnId: "turn-1",
+        ...extra
+      }
+    });
+  });
+  context.__codexpatchObserveAppServerRequest({
+    method: "item/tool/call",
+    id: "completed-setup",
+    params: {
+      threadId: "approval-matrix",
+      tool: "setup_codex_step",
+      arguments: { step: "complete" }
+    }
+  });
+
+  const sent = logLines
+    .filter((line) => line.includes(" notify-send "))
+    .map((line) => JSON.parse(line.slice(line.indexOf("{"))));
+  assert.equal(sent.length, requests.length);
+  assert.equal(sent.filter((entry) => entry.kind === "approval").length, 3);
+  assert.equal(sent.filter((entry) => entry.kind === "input_needed").length, 9);
+  assert.ok(sent.some((entry) => entry.body === "Codex 需要审批"));
+  assert.ok(sent.some((entry) => entry.body === "Codex 等待你的输入"));
 });
 
 test("retries unknown output without rollback and rejects a stale terminal", () => {
@@ -159,6 +383,15 @@ test("retries unknown output without rollback and rejects a stale terminal", () 
     method: "turn/completed",
     params: {
       threadId: "conversation-1",
+      turn: { id: "stale-turn", status: "completed" }
+    }
+  });
+  assert.equal(retries.length, 1);
+
+  context.items[0]({
+    method: "turn/completed",
+    params: {
+      threadId: "conversation-1",
       turn: {
         id: "turn-2",
         status: "failed",
@@ -169,6 +402,219 @@ test("retries unknown output without rollback and rejects a stale terminal", () 
   assert.equal(retries.length, 2);
   assert.equal(retries[1].mode, "edit-message");
   assert.equal(retries[1].turnId, "turn-2");
+});
+
+test("notifies only the current completed turn and does not suppress its successor", () => {
+  const source =
+    'items.push(connection.registerInternalNotificationHandler(notification=>{notification.method==="turn/completed"&&events.emit("turnComplete")}));';
+  const patched = patchNotificationRegistration(source, {
+    runtimeNotify: true,
+    autoRetry: true
+  });
+  const logLines = [];
+  const context = {
+    items: [],
+    connection: {
+      registerInternalNotificationHandler(handler) {
+        return handler;
+      }
+    },
+    events: { emit() {} },
+    process: { env: {}, execPath: "codex", platform: "linux" },
+    require(name) {
+      if (name === "fs") {
+        return {
+          appendFileSync(_file, data) {
+            logLines.push(String(data));
+          }
+        };
+      }
+      if (name === "os") return { tmpdir: () => "/tmp" };
+      if (name === "path") return path;
+      if (name === "child_process") {
+        return {
+          execFile(_file, _args, _options, callback) {
+            callback(null, "List of devices attached\n", "");
+          }
+        };
+      }
+      throw new Error(`Unexpected module: ${name}`);
+    }
+  };
+  vm.runInNewContext(patched, context);
+
+  const send = (method, turnId, status) =>
+    context.items[0]({
+      method,
+      params: {
+        threadId: "completion-order",
+        turn: { id: turnId, status }
+      }
+    });
+  const completedNotifications = () =>
+    logLines.filter(
+      (line) => line.includes(" notify-send ") && line.includes('"status":"completed"')
+    ).length;
+
+  send("turn/started", "turn-1", "inProgress");
+  send("turn/started", "turn-2", "inProgress");
+  send("turn/completed", "turn-1", "completed");
+  assert.equal(completedNotifications(), 0);
+
+  send("turn/completed", "turn-2", "completed");
+  context.__codexpatchObserveRichTurnCompleted({
+    conversationId: "completion-order",
+    turnId: "turn-2",
+    status: "completed",
+    hasPendingContinuation: false,
+    isSubagent: false
+  });
+  assert.equal(completedNotifications(), 1);
+
+  send("turn/started", "turn-3", "inProgress");
+  send("turn/completed", "turn-3", "completed");
+  context.__codexpatchObserveRichTurnCompleted({
+    conversationId: "completion-order",
+    turnId: "turn-3",
+    status: "completed",
+    hasPendingContinuation: false,
+    isSubagent: false
+  });
+  assert.equal(completedNotifications(), 2);
+});
+
+test("does not report an active goal complete after an intermediate assistant turn", () => {
+  const source =
+    'items.push(connection.registerInternalNotificationHandler(notification=>{notification.method==="turn/completed"&&events.emit("turnComplete")}));';
+  const patched = patchNotificationRegistration(source, {
+    runtimeNotify: true,
+    autoRetry: true
+  });
+  const logLines = [];
+  const context = {
+    items: [],
+    connection: {
+      registerInternalNotificationHandler(handler) {
+        return handler;
+      }
+    },
+    events: { emit() {} },
+    process: { env: {}, execPath: "codex", platform: "linux" },
+    require(name) {
+      if (name === "fs") {
+        return {
+          appendFileSync(_file, data) {
+            logLines.push(String(data));
+          }
+        };
+      }
+      if (name === "os") return { tmpdir: () => "/tmp" };
+      if (name === "path") return path;
+      if (name === "child_process") {
+        return {
+          execFile(_file, _args, _options, callback) {
+            callback(null, "List of devices attached\n", "");
+          }
+        };
+      }
+      throw new Error(`Unexpected module: ${name}`);
+    }
+  };
+  vm.runInNewContext(patched, context);
+
+  const sendTurn = (method, turnId, status) =>
+    context.items[0]({
+      method,
+      params: {
+        threadId: "goal-conversation",
+        turn: { id: turnId, status }
+      }
+    });
+  const sendGoal = (status, updatedAt) =>
+    context.items[0]({
+      method: "thread/goal/updated",
+      params: {
+        threadId: "goal-conversation",
+        goal: { status, updatedAt }
+      }
+    });
+  const completedNotifications = () =>
+    logLines.filter(
+      (line) => line.includes(" notify-send ") && line.includes('"status":"completed"')
+    ).length;
+
+  sendGoal("active", 100);
+  sendTurn("turn/started", "turn-1", "inProgress");
+  sendTurn("turn/completed", "turn-1", "completed");
+  context.__codexpatchObserveRichTurnCompleted({
+    conversationId: "goal-conversation",
+    turnId: "turn-1",
+    status: "completed",
+    hasPendingContinuation: true,
+    isSubagent: false
+  });
+  assert.equal(completedNotifications(), 0);
+
+  sendTurn("turn/started", "turn-2", "inProgress");
+  sendGoal("complete", 200);
+  assert.equal(completedNotifications(), 0);
+  context.items[0]({
+    method: "thread/goal/cleared",
+    params: { threadId: "goal-conversation" }
+  });
+  sendTurn("turn/completed", "turn-2", "completed");
+  context.__codexpatchObserveRichTurnCompleted({
+    conversationId: "goal-conversation",
+    turnId: "turn-2",
+    status: "completed",
+    hasPendingContinuation: false,
+    isSubagent: false
+  });
+  assert.equal(completedNotifications(), 1);
+
+  sendGoal("complete", 200);
+  assert.equal(completedNotifications(), 1);
+
+  context.__codexpatchObserveThreadStreamState({
+    conversationId: "snapshot-goal",
+    change: {
+      type: "snapshot",
+      conversationState: {
+        threadGoal: { status: "active", updatedAt: 300 }
+      }
+    }
+  });
+  context.items[0]({
+    method: "turn/started",
+    params: {
+      threadId: "snapshot-goal",
+      turn: { id: "snapshot-turn", status: "inProgress" }
+    }
+  });
+  context.items[0]({
+    method: "turn/completed",
+    params: {
+      threadId: "snapshot-goal",
+      turn: { id: "snapshot-turn", status: "completed" }
+    }
+  });
+  context.__codexpatchObserveRichTurnCompleted({
+    conversationId: "snapshot-goal",
+    turnId: "snapshot-turn",
+    status: "completed",
+    hasPendingContinuation: false,
+    isSubagent: false
+  });
+  assert.equal(completedNotifications(), 1);
+
+  context.items[0]({
+    method: "thread/goal/updated",
+    params: {
+      threadId: "snapshot-goal",
+      goal: { status: "complete", updatedAt: 400 }
+    }
+  });
+  assert.equal(completedNotifications(), 2);
 });
 
 test("emits the five requested notification types from proven lifecycle events", () => {
@@ -223,6 +669,14 @@ test("emits the five requested notification types from proven lifecycle events",
       }
     }
   });
+  context.__codexpatchObserveRichTurnCompleted({
+    conversationId: "no-retry",
+    turnId: "failed-1",
+    status: "failed",
+    error: { message: "fatal local error" },
+    hasPendingContinuation: false,
+    isSubagent: false
+  });
   context.items[0]({
     method: "turn/completed",
     params: {
@@ -246,6 +700,17 @@ test("emits the five requested notification types from proven lifecycle events",
     method: "item/agentMessage/delta",
     params: { threadId: "retry", turnId: "retry-1", delta: "More response" }
   });
+  context.items[0]({
+    method: "turn/completed",
+    params: {
+      threadId: "retry",
+      turn: {
+        id: "retry-1",
+        status: "failed",
+        error: { message: "We're currently experiencing high demand again." }
+      }
+    }
+  });
   context.__codexpatchObserveAppServerRequest({
     method: "item/commandExecution/requestApproval",
     id: "approval-1",
@@ -258,11 +723,24 @@ test("emits the five requested notification types from proven lifecycle events",
       turn: { id: "complete-1", status: "completed" }
     }
   });
+  context.__codexpatchObserveRichTurnCompleted({
+    conversationId: "complete",
+    turnId: "complete-1",
+    status: "completed",
+    hasPendingContinuation: false,
+    isSubagent: false
+  });
 
   const sent = logLines
     .filter((line) => line.includes(" notify-send "))
     .map((line) => JSON.parse(line.slice(line.indexOf("{"))));
-  assert.equal(retries.length, 1);
+  assert.equal(retries.length, 2);
+  assert.equal(
+    sent.filter((entry) =>
+      entry.body.startsWith("Codex 因错误中断，正在自动重试")
+    ).length,
+    2
+  );
   assert.equal(
     sent.filter((entry) => entry.body === "Codex 自动重试后助手已回应").length,
     1
@@ -277,7 +755,7 @@ test("emits the five requested notification types from proven lifecycle events",
       entry.body.startsWith("Codex 因错误中断，正在自动重试")
     )
   );
-  assert.ok(sent.some((entry) => entry.body === "Codex 需要审批命令"));
+  assert.ok(sent.some((entry) => entry.body === "Codex 需要审批"));
   assert.ok(sent.some((entry) => entry.body === "Codex 任务已完成"));
 });
 
@@ -555,6 +1033,50 @@ function makeExtensionFixture(t) {
   fs.mkdirSync(path.join(extensionDir, "webview", "assets"), { recursive: true });
   t.after(() => fs.rmSync(extensionDir, { recursive: true, force: true }));
   return extensionDir;
+}
+
+function makeNotificationRuntime(options = {}) {
+  const source =
+    'items.push(connection.registerInternalNotificationHandler(notification=>{notification.method==="turn/completed"&&events.emit("turnComplete")}));';
+  const patched = patchNotificationRegistration(source, {
+    runtimeNotify: true,
+    autoRetry: true,
+    ...options
+  });
+  const logLines = [];
+  const retries = [];
+  const context = {
+    items: [],
+    connection: {
+      registerInternalNotificationHandler(handler) {
+        return handler;
+      }
+    },
+    events: { emit() {} },
+    process: { env: {}, execPath: "codex", platform: "linux" },
+    require(name) {
+      if (name === "fs") {
+        return {
+          appendFileSync(_file, data) {
+            logLines.push(String(data));
+          }
+        };
+      }
+      if (name === "os") return { tmpdir: () => "/tmp" };
+      if (name === "path") return path;
+      if (name === "child_process") {
+        return {
+          execFile(_file, _args, _options, callback) {
+            callback(null, "List of devices attached\n", "");
+          }
+        };
+      }
+      throw new Error(`Unexpected module: ${name}`);
+    }
+  };
+  vm.runInNewContext(patched, context);
+  context.__codexpatchBroadcastToWebview = (event) => retries.push(event);
+  return { context, logLines, retries };
 }
 
 function makeRetryHandler(options = {}) {

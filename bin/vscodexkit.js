@@ -64,14 +64,20 @@ const WEBVIEW_APP_MAIN_NEEDLES = [
   '"thread-follower-interrupt-turn-for-host"',
   '"retry-safety-buffered-turn-for-host"'
 ];
+const WEBVIEW_APP_SERVER_SIGNALS_NEEDLES = [
+  "emitTurnCompleted({conversationId:",
+  "hasPendingContinuation:",
+  "restoredQueuedFollowUps:"
+];
 const BASELINE_DIR = ".codexpatch";
 const BASELINE_ORIGINAL_DIR = path.join(BASELINE_DIR, "original");
 const BASELINE_META = path.join(BASELINE_DIR, "baseline.json");
 
 const MARKERS = {
-  notifyV10: "codexpatch:v22:notification-types",
+  notifyV10: "codexpatch:v26:authoritative-turn-boundaries",
   mcpLifecycle: "codexpatch:v1:mcp-lifecycle-conversation-end",
   appServerRequest: "codexpatch:v2:app-server-request-approval",
+  appServerSignals: "codexpatch:v1:authoritative-turn-completed",
   threadStreamState: "codexpatch:v2:thread-stream-state-conversation-end",
   userInterrupt: "codexpatch:v1:user-interrupt-suppress",
   webviewUserInterrupt: "codexpatch:v2:webview-user-interrupt",
@@ -330,9 +336,11 @@ function cpStatus(e){return e?.status||e?.params?.turn?.status||"unknown"}
 function cpFinal(e){return e==="completed"||e==="failed"||e==="interrupted"}
 function cpApproval(e){return e==="approval_needed"||e==="needs_approval"||e==="approval"||e==="input_needed"}
 function cpAwaitingApprovalMethod(e){let r=cpText(e),n=r.toLowerCase();return r==="codex/event/exec_approval_request"||r==="codex/event/apply_patch_approval_request"||n==="item/commandexecution/requestapproval"||n==="item/filechange/requestapproval"||n==="item/permissions/requestapproval"||/(approval_request|requestapproval|request_approval|approvalrequest|permissions_request|permissionrequest)/i.test(r)}
-function cpAwaitingInputMethod(e){let r=cpText(e),n=r.toLowerCase();return r==="codex/event/request_user_input"||r==="codex/event/elicitation_request"||r==="codex/event/dynamic_tool_call_request"||n==="item/tool/requestuserinput"||n==="item/tool/requestoptionpicker"||n==="item/tool/requestsetupcodexcontextpicker"||n==="item/plan/requestimplementation"||/(requestuserinput|request_user_input|requestoptionpicker|requestsetupcodexcontextpicker|requestimplementation|elicitation_request|dynamic_tool_call_request)/i.test(r)}
-function cpAwaitingUserMethod(e){return cpAwaitingApprovalMethod(e)||cpAwaitingInputMethod(e)}
-function cpAuthoritativeEnd(e){let r=e?.source||"",n=e?.method||"";return r==="turn-completed"||n==="turn/completed"||n==="codex/event/task_complete"||n==="codex/event/error"||n==="codex/event/stream_error"||n==="codex/event/turn_aborted"}
+function cpAwaitingInputMethod(e){let r=cpText(e),n=r.toLowerCase();return r==="codex/event/request_user_input"||r==="codex/event/elicitation_request"||r==="codex/event/dynamic_tool_call_request"||n==="item/tool/requestuserinput"||n==="item/tool/requestoptionpicker"||n==="item/tool/requestsetupcodexcontextpicker"||n==="item/plan/requestimplementation"||n==="mcpserver/elicitation/request"||/(requestuserinput|request_user_input|requestoptionpicker|requestsetupcodexcontextpicker|requestimplementation|elicitation_request|dynamic_tool_call_request)/i.test(r)}
+function cpDynamicInputRequest(e){try{if(cpText(e?.method).toLowerCase()!=="item/tool/call")return false;let r=e?.params||{},n=cpText(r.tool),o=r.arguments;if(typeof o==="string")try{o=JSON.parse(o)}catch(_){o={}}if(n==="setup_codex_step")return cpText(o?.step)!=="complete";return n==="request_option_picker"||n==="request_onboarding_input"||n==="setup_codex_context_picker"}catch(_){return false}}
+function cpAwaitingInputRequest(e){return cpAwaitingInputMethod(e?.method)||cpDynamicInputRequest(e)}
+function cpAwaitingUserRequest(e){return cpAwaitingApprovalMethod(e?.method)||cpAwaitingInputRequest(e)}
+function cpAuthoritativeEnd(e){let r=e?.source||"",n=e?.method||"";return r==="authoritative-turn-completed"||n==="codexpatch/turn-completed"||n==="codex/event/error"||n==="codex/event/stream_error"||n==="codex/event/turn_aborted"}
 function cpMarkUserInterrupt(e){try{let r=cpConv(e),n=Date.now(),o=globalThis.__codexpatchUserInterrupts||(globalThis.__codexpatchUserInterrupts=new Map);if(!r||r==="global"){cpLog("user-interrupt-mark-skip",{conversationId:r,requestId:cpRequestId(e),method:e?.method});return}o.set(r,{at:n,requestId:cpRequestId(e),method:e?.method||""});for(let[e,r]of o)try{n-r.at>3e5&&o.delete(e)}catch(_){}cpLog("user-interrupt-mark",{conversationId:r,requestId:cpRequestId(e),source:e?.source,method:e?.method})}catch(r){cpLog("user-interrupt-mark-exception",{message:r?.message})}}
 function cpRecentUserInterrupt(e){try{let r=cpConv(e),n=Date.now(),o=globalThis.__codexpatchUserInterrupts;if(!o||!r)return false;let i=o.get(r);if(i&&n-i.at<3e5)return true;i&&o.delete(r);return false}catch(_){return false}}
 function cpLooksUserInterrupted(e){let r=(cpText(e?.method)+" "+cpMsg(e)).toLowerCase(),n=cpStatus(e),o=e?.method||"";if((n==="interrupted"||o==="codex/event/turn_aborted")&&cpRecentUserInterrupt(e))return true;return /user.*(interrupt|cancel|abort)|cancelled by user|canceled by user|aborted by user|用户.*(中断|取消)/.test(r)}
@@ -349,43 +357,51 @@ function cpPathLooksAssistantOutput(e,r){return cpObjHasAssistantOutput(r)}
 function cpRememberTurnPatch(e,r,n){try{let o=cpConv(e);if(!o||o==="global")return;let i=Date.now(),s=cpOutputMap();for(let[e,r]of s)try{i-r.at>6e5&&s.delete(e)}catch(_){}let a=cpTurnPathOf(r),c=cpFindStatus(n,0),l=cpText(n?.turnId)||cpText(n?.id),u=s.get(o)||{hasOutput:false,at:i};if(a&&u.turnPath&&u.turnPath!==a)u={hasOutput:false,at:i};if(!a&&c==="inProgress"&&l&&u.turnId&&u.turnId!==l&&!u.turnPath)u={hasOutput:false,at:i};if(a)u.turnPath=a;else if(l&&!u.turnId)u.turnId=l;if(cpPathLooksAssistantOutput(r,n)||cpObjHasAssistantOutput(n))u.hasOutput=true;u.at=i;s.set(o,u);if(u.hasOutput)cpLog("auto-retry-output-seen",{conversationId:o,turnId:u.turnId||"",turnPath:u.turnPath||"",itemIndex:cpItemIndexOf(r)})}catch(r){cpLog("auto-retry-output-track-exception",{message:r?.message})}}
 function cpRememberAssistantOutput(e){try{let r=e?.change||e?.params?.change||{};if(r.type==="snapshot"){let n=r.conversationState?.turns||r.conversationState?.conversationTurns||r.conversationState?.visibleTurnEntries;if(Array.isArray(n))for(let r=n.length-1;r>=0;r--){if(cpFindStatus(n[r],0)==="inProgress"){cpRememberTurnPatch(e,["turns",r],n[r]);break}}return}if(Array.isArray(r.patches)){for(let n of r.patches){if(cpPathLooksTurn(n?.path))cpRememberTurnPatch(e,n.path,n?.value)}return}cpRememberTurnPatch(e,[],r)}catch(r){cpLog("auto-retry-output-observe-exception",{message:r?.message})}}
 function cpAssistantOutputStateForRetry(e){try{let r=e?.params?.turn||e?.turn;if(r&&typeof r==="object"&&cpObjHasAssistantOutput(r))return"present";let n=cpConv(e),o=cpTurnId(e),i=cpOutputMap().get(n);if(!i)return"unknown";if(o&&i.turnId&&o!==i.turnId)return"unknown";return i.hasOutput?"present":"absent"}catch(_){return"unknown"}}
+function cpActiveTurns(){return globalThis.__codexpatchActiveTurns||(globalThis.__codexpatchActiveTurns=new Map)}
+function cpGoalStates(){return globalThis.__codexpatchGoalStates||(globalThis.__codexpatchGoalStates=new Map)}
+function cpRichTurns(){return globalThis.__codexpatchRichTurns||(globalThis.__codexpatchRichTurns=new Map)}
+function cpRememberGoalState(e,r,n){try{let o=cpConv(e),i=cpText(r?.status);if(!o||o==="global"||!/^(active|paused|blocked|budgetLimited|usageLimited|complete)$/.test(i)){cpLog("goal-state-skip-invalid",{conversationId:o,status:i,source:n});return null}let s=cpText(r?.updatedAt)||cpText(r?.id),a=Date.now(),c=cpGoalStates();for(let[e,r]of c)try{a-r.at>216e5&&c.delete(e)}catch(_){}let l=c.get(o),u=l&&l.status===i&&l.updatedAt===s?l:{status:i,updatedAt:s,notified:false};return u.status=i,u.updatedAt=s,u.at=a,u.source=n,c.set(o,u),cpLog("goal-state-observed",{conversationId:o,status:i,updatedAt:s,source:n}),u}catch(r){cpLog("goal-state-observe-exception",{message:r?.message});return null}}
+function cpRememberGoalFromStream(e){try{let r=e?.change||e?.params?.change||{};if(r.type==="snapshot"){let n=r.conversationState?.threadGoal;n&&cpRememberGoalState(e,n,"stream-snapshot");return}if(Array.isArray(r.patches)){for(let n of r.patches)cpPath(n?.path).includes("threadGoal")&&n?.value&&cpRememberGoalState(e,n.value,"stream-patch");return}r.threadGoal&&cpRememberGoalState(e,r.threadGoal,"stream-state")}catch(r){cpLog("goal-stream-observe-exception",{message:r?.message})}}
+function cpObserveGoalNotification(e){try{let r=cpText(e?.method),n=e?.params||{},o=cpText(n.threadId)||cpText(n.conversationId)||"global";if(r==="thread/goal/cleared"){let e=cpGoalStates().get(o);if(e?.status==="complete"&&!e.notified)e.cleared=true,e.at=Date.now(),cpLog("goal-complete-retained-after-clear",{conversationId:o,updatedAt:e.updatedAt||""});else cpGoalStates().delete(o),cpLog("goal-state-cleared",{conversationId:o});return}if(r!=="thread/goal/updated")return;let i=cpRememberGoalState({conversationId:o},n.goal,"notification");if(!i)return;if(/^(paused|blocked|budgetLimited|usageLimited)$/.test(i.status)&&!i.notified)i.notified=true,cpNotify({source:"thread-goal",method:r,conversationId:o,threadId:o,requestId:i.updatedAt,status:"input_needed",kind:"goal_attention",goalStatus:i.status,params:n});if(i.status!=="complete"||i.notified||cpActiveTurns().has(o))return;let s=cpRichTurns().get(o);if(!s||s.status!=="completed"||s.hasPendingContinuation!==false||s.isSubagent===true){cpLog("goal-complete-await-authoritative-turn",{conversationId:o,hasRichTurn:!!s,pending:s?.hasPendingContinuation,isSubagent:s?.isSubagent});return}cpHandle({...s,kind:"goal_complete",requestId:i.updatedAt||s.turnId})}catch(r){cpLog("goal-notification-observe-exception",{message:r?.message})}}
+function cpObserveRichTurnCompleted(e){try{let r=cpConv(e),n=cpTurnId(e),o=cpStatus(e);if(r==="global"||!n||!cpFinal(o)||typeof e?.hasPendingContinuation!=="boolean"||typeof e?.isSubagent!=="boolean"){cpLog("rich-turn-skip-invalid",{conversationId:r,turnId:n,status:o,pending:e?.hasPendingContinuation,isSubagent:e?.isSubagent});return}let i={source:"authoritative-turn-completed",method:"codexpatch/turn-completed",conversationId:r,threadId:r,hostId:cpHost(e),turnId:n,status:o,error:e?.error,hasPendingContinuation:e.hasPendingContinuation,isSubagent:e.isSubagent,kind:"authoritative_turn",params:e,at:Date.now()};cpRichTurns().set(r,i);if(i.isSubagent){cpLog("notify-skip-subagent-turn",{conversationId:r,turnId:n,status:o});return}cpHandle(i)}catch(r){cpLog("rich-turn-observe-exception",{message:r?.message})}}
 function cpRetryRounds(){return globalThis.__codexpatchRetryRounds||(globalThis.__codexpatchRetryRounds=new Map)}
 function cpRetryRound(e){let r=cpConv(e);return r&&r!=="global"?cpRetryRounds().get(r):null}
-function cpArmRetryRound(e){let r=cpConv(e),n=Date.now(),o=cpRetryRounds(),i=o.get(r),s=i||{notified:false,startedAt:n};return s.awaitingRestart=true,s.sourceTurnId=cpText(e?.turnId),s.activeTurnId="",s.responseNotified=false,s.messageRetry=e?.mode==="message"||e?.mode==="edit-message",s.at=n,o.set(r,s),s}
+function cpArmRetryRound(e){let r=cpConv(e),n=Date.now(),o=cpRetryRounds(),i=o.get(r),s=i||{startedAt:n};return s.awaitingRestart=true,s.sourceTurnId=cpText(e?.turnId),s.activeTurnId="",s.responseNotified=false,s.notified=false,s.messageRetry=e?.mode==="message"||e?.mode==="edit-message",s.at=n,o.set(r,s),s}
 function cpRestartRetryRound(e){try{let r=cpConv(e),n=cpRetryRounds().get(r),o=cpTurnId(e);if(!n?.awaitingRestart)return;if(!o){cpLog("auto-retry-restart-unproven",{conversationId:r});return}n.activeTurnId=o,n.awaitingRestart=false,n.messageRetry&&(n.messageTurnId=o),n.at=Date.now(),cpLog("auto-retry-restart-observed",{conversationId:r,turnId:o,sourceTurnId:n.sourceTurnId||"",messageRetry:n.messageRetry===true})}catch(_){}}
 function cpClearRetryRound(e,r){try{let n=cpConv(e);cpRetryRounds().delete(n);cpLog("auto-retry-round-end",{conversationId:n,reason:r})}catch(_){}}
 function cpRetryBlob(e){let r=e?.params||{},n=[e?.source,e?.method,cpStatus(e),cpMsg(e),e?.error?.code,r.error?.code,r.turn?.error?.code,r.reason,r.details,r.errorMessage,cpJson(e?.error),cpJson(e?.change),cpJson(r.change),cpJson(r.error),cpJson(r.turn?.error),cpJson(r.payload?.error),cpJson(r.event?.error)].join(" ");return n.slice(0,12e3).toLowerCase()}
 function cpLooksStreamRetryExhausted(e){let r=cpRetryBlob(e),n=(cpText(e?.source)+" "+cpText(e?.method)).toLowerCase(),o=/stream_error|thread-stream-state/.test(n)||/\\bstream\\b|stream[_ -]?/.test(r),i=cpStatus(e)==="failed"&&/(currently experiencing high demand|temporary errors?|temporarily unavailable|service unavailable|overloaded|too many requests|rate limit|\\b429\\b|\\b502\\b|\\b503\\b|\\b504\\b|gateway timeout|network error|fetch failed|failed to fetch|request failed|error sending request|stream disconnected|connection (?:reset|refused|closed|terminated)|econnreset|etimedout|eai_again|enotfound|timed?\\s*out)/.test(r);if(/stream[_ -]?max[_ -]?retries/.test(r))return true;if(i)return true;if(!o)return false;return /max(?:imum)?\\s+retries|retry limit|retries exhausted|exhausted\\s+retries|too many retries|retry attempts? exhausted|all retries failed|stream disconnected|error sending request/.test(r)}
-function cpRequestAutoRetry(e){try{let r=globalThis.__codexpatchSettings||{};if(r.autoRetry!==true){cpLog("auto-retry-skip-disabled",{conversationId:cpConv(e),status:cpStatus(e),method:e?.method});return false}if(cpLooksUserInterrupted(e)){cpLog("auto-retry-skip-user-interrupt",{conversationId:cpConv(e),status:cpStatus(e),method:e?.method});return false}if(!cpLooksStreamRetryExhausted(e)){cpLog("auto-retry-skip-not-stream-max-retries",{conversationId:cpConv(e),status:cpStatus(e),method:e?.method,msg:cpMsg(e)});return false}let n=cpAssistantOutputStateForRetry(e);if(n==="unknown")cpLog("auto-retry-output-unknown-message-only",{conversationId:cpConv(e),outputState:n,status:cpStatus(e),method:e?.method});let o=cpConv(e),i=cpTurnId(e)||cpOutputMap().get(o)?.turnId||"",s=cpRetryRound(e),a=n==="absent"?"rollback":s?.messageRetry&&s.messageTurnId&&s.messageTurnId===i?"edit-message":"message";if(a==="message"&&s?.messageRetry){cpLog("auto-retry-skip-message-turn-mismatch",{conversationId:o,turnId:i,expectedTurnId:s.messageTurnId||""});return false}let c=cpHost(e),l=cpModel(e),u=o+"|"+(i||cpRequestId(e)||cpMsg(e).slice(0,80))+"|"+cpStatus(e)+"|"+(e?.method||"")+"|"+a,f=Date.now(),p=globalThis.__codexpatchAutoRetryLast||(globalThis.__codexpatchAutoRetryLast=new Map),h=p.get(u);if(h&&f-h<3e4){cpLog("auto-retry-skip-duplicate",{key:u,mode:a});return true}for(let[e,r]of p)try{f-r>12e4&&p.delete(e)}catch(_){}let g={type:"codexpatch-auto-retry",hostId:c,conversationId:o,threadId:o,turnId:i,model:l||null,status:cpStatus(e),method:e?.method||"",reason:"stream_max_retries",mode:a,allowMessageRetry:a!=="rollback",hadTrackedOutput:n==="present",outputState:n,windowMs:3e4,at:f},m=globalThis.__codexpatchBroadcastToWebview,y=cpMsg(e);if(typeof m==="function"){let x=cpArmRetryRound(g);cpLog("auto-retry-arm",g);m(g);p.set(u,f);if(!x.notified)x.notified=true,cpNotify({source:"auto-retry",method:"codexpatch/auto-retry",conversationId:o,threadId:o,turnId:i,status:"retrying",kind:"retry",params:{...g,errorMessage:y}});else cpLog("auto-retry-notify-skip-round",{conversationId:o});return true}else cpLog("auto-retry-no-broadcast",g);return false}catch(r){cpLog("auto-retry-exception",{message:r?.message});return false}}
-function cpBody(e,r,n,o){let i=o==="retry"?"Codex 因错误中断，正在自动重试":o==="retry_response"?"Codex 自动重试后助手已回应":o==="approval"||cpAwaitingApprovalMethod(r)?"Codex 需要审批命令":e==="completed"?"Codex 任务已完成":"Codex 因错误中断，未执行自动重试";return n&&(o==="retry"||e==="failed"||e==="interrupted")?i+": "+String(n).slice(0,180):i}
-function cpTitle(e){return e==="approval"?"Codex 需要审批":e==="retry_response"?"Codex 自动重试":"Codex"}
-function cpNotify(e){try{let r=globalThis.__codexpatchSettings||{};if(r.notify===false){cpLog("notify-skip-disabled",e);return}let n=cpStatus(e),o=e?.kind||"",i=e?.method||"",s=cpAwaitingApprovalMethod(i),v=o==="retry",q=o==="retry_response";if(!s&&!v&&!q&&!cpFinal(n)){cpLog("notify-skip-not-supported",{status:n,kind:o,method:i});return}if(!s&&!v&&!q&&cpLooksUserInterrupted(e)){cpLog("notify-skip-user-interrupt",{status:n,method:i,msg:cpMsg(e)});return}let a=Date.now(),c=globalThis.__codexpatchNotifyLastByConversation||(globalThis.__codexpatchNotifyLastByConversation=new Map),l=cpConv(e),u=s?"approval":v?"retry":q?"retry_response":n,d=l+"|"+u+"|"+i+"|"+cpRequestId(e),f=c.get(d);if(f&&a-f<1e4){cpLog("notify-skip-duplicate",{key:d,status:n,kind:o});return}for(let[e,r]of c)try{a-r>12e4&&c.delete(e)}catch(_){}c.set(d,a);let p=cpMsg(e),h=cpTitle(u),g=cpBody(n,i,p,o),m=s||v||!q&&n!=="completed";cpLog("notify-send",{conversationId:l,status:n,kind:o,method:i,body:g});cpNotifyAdb(h,g,u);if(process.platform==="win32")try{let e=${JSON.stringify(WINDOWS_SYSTEM_NOTIFY_PS_V8)},r=cpMod(),o=r.path.join(r.os.tmpdir(),"codexpatch-notify.ps1");try{r.fs.writeFileSync(o,e,"utf8");cpLog("notify-script-written",{path:o,bytes:e.length})}catch(e){cpLog("notify-script-write-failed",{message:e?.message})}let n=r.cp.spawn("powershell.exe",["-NoProfile","-ExecutionPolicy","Bypass","-Sta","-File",o],{windowsHide:true,detached:false,stdio:["ignore","ignore","pipe"],env:{...process.env,CODEXPATCH_TITLE:h,CODEXPATCH_BODY:g,CODEXPATCH_ICON:m?"Warning":"Info",CODEXPATCH_EVENT:u,CODEXPATCH_AUMID:"vscodexkit.VSCode",CODEXPATCH_LOG_FILE:process.env.CODEXPATCH_LOG_FILE||r.path.join(r.os.tmpdir(),"codexpatch.log"),CODEXPATCH_SHORTCUT_TARGET:process.execPath,CODEXPATCH_SHORTCUT_ICON:process.execPath}});cpLog("notify-spawned",{pid:n.pid,event:u,file:o});n.stderr?.on?.("data",e=>cpLog("notify-stderr",{message:String(e).slice(0,500)}));n.on?.("exit",(e,r)=>cpLog("notify-exit",{code:e,signal:r,event:u}));n.on?.("error",e=>cpLog("notify-spawn-error",{message:e?.message}));return}catch(e){cpLog("notify-spawn-exception",{message:e?.message})}m?ut.window.showWarningMessage(g):ut.window.showInformationMessage(g)}catch(e){cpLog("notify-exception",{message:e?.message})}}
-function cpStart(e){try{let r=cpConv(typeof e==="string"?{conversationId:e}:e);(globalThis.__codexpatchActiveConversations||(globalThis.__codexpatchActiveConversations=new Set)).add(r);if(typeof e==="string")try{cpOutputMap().delete(r)}catch(_){}else cpRestartRetryRound(e);cpLog("conversation-start",{conversationId:r,source:e?.source,method:e?.method})}catch(_){}}
+function cpRequestAutoRetry(e){try{let r=globalThis.__codexpatchSettings||{};if(r.autoRetry!==true){cpLog("auto-retry-skip-disabled",{conversationId:cpConv(e),status:cpStatus(e),method:e?.method});return false}if(cpLooksUserInterrupted(e)){cpLog("auto-retry-skip-user-interrupt",{conversationId:cpConv(e),status:cpStatus(e),method:e?.method});return false}if(!cpLooksStreamRetryExhausted(e)){cpLog("auto-retry-skip-not-stream-max-retries",{conversationId:cpConv(e),status:cpStatus(e),method:e?.method,msg:cpMsg(e)});return false}let n=cpAssistantOutputStateForRetry(e);if(n==="unknown")cpLog("auto-retry-output-unknown-message-only",{conversationId:cpConv(e),outputState:n,status:cpStatus(e),method:e?.method});let o=cpConv(e),i=cpTurnId(e)||cpOutputMap().get(o)?.turnId||"",s=cpRetryRound(e),a=n==="absent"?"rollback":s?.messageRetry&&s.messageTurnId&&s.messageTurnId===i?"edit-message":"message";if(a==="message"&&s?.messageRetry){cpLog("auto-retry-skip-message-turn-mismatch",{conversationId:o,turnId:i,expectedTurnId:s.messageTurnId||""});return false}let c=cpHost(e),l=cpModel(e),u=o+"|"+(i||cpRequestId(e)||cpMsg(e).slice(0,80))+"|"+cpStatus(e)+"|"+(e?.method||"")+"|"+a,f=Date.now(),p=globalThis.__codexpatchAutoRetryLast||(globalThis.__codexpatchAutoRetryLast=new Map),h=p.get(u);if(h&&f-h<3e4){cpLog("auto-retry-skip-duplicate",{key:u,mode:a});return true}for(let[e,r]of p)try{f-r>12e4&&p.delete(e)}catch(_){}let g={type:"codexpatch-auto-retry",hostId:c,conversationId:o,threadId:o,turnId:i,model:l||null,status:cpStatus(e),method:e?.method||"",reason:"stream_max_retries",mode:a,allowMessageRetry:a!=="rollback",hadTrackedOutput:n==="present",outputState:n,windowMs:3e4,at:f},m=globalThis.__codexpatchBroadcastToWebview,y=cpMsg(e);if(typeof m==="function"){let x=cpArmRetryRound(g);cpLog("auto-retry-arm",g);m(g);p.set(u,f);if(!x.notified)x.notified=true,cpNotify({source:"auto-retry",method:"codexpatch/auto-retry",conversationId:o,threadId:o,turnId:i,requestId:i,status:"retrying",kind:"retry",params:{...g,errorMessage:y}});else cpLog("auto-retry-notify-skip-round",{conversationId:o});return true}else cpLog("auto-retry-no-broadcast",g);return false}catch(r){cpLog("auto-retry-exception",{message:r?.message});return false}}
+function cpBody(e,r,n,o,a){let i=o==="retry"?"Codex 因错误中断，正在自动重试":o==="retry_response"?"Codex 自动重试后助手已回应":o==="approval"?"Codex 需要审批":o==="input_needed"?"Codex 等待你的输入":o==="goal_attention"?a==="paused"?"Codex 任务已暂停":a==="blocked"?"Codex 任务已阻塞，需要处理":a==="budgetLimited"?"Codex 任务因预算限制暂停":"Codex 任务因用量限制暂停":e==="completed"?"Codex 任务已完成":e==="interrupted"?"Codex 对话已中断":"Codex 因错误中断，未执行自动重试";return n&&(o==="retry"||e==="failed"||e==="interrupted")?i+": "+String(n).slice(0,180):i}
+function cpTitle(e){return e==="approval"?"Codex 需要审批":e==="input_needed"||e==="goal_attention"?"Codex 需要处理":e==="retry_response"?"Codex 自动重试":"Codex"}
+function cpNotify(e){try{let r=globalThis.__codexpatchSettings||{};if(r.notify===false){cpLog("notify-skip-disabled",e);return}let n=cpStatus(e),o=e?.kind||"",i=e?.method||"",s=o==="approval"||cpAwaitingApprovalMethod(i),v=o==="input_needed"||cpAwaitingInputRequest(e),q=o==="retry",a=o==="retry_response",c=o==="goal_attention";if(!s&&!v&&!q&&!a&&!c&&!cpFinal(n)){cpLog("notify-skip-not-supported",{status:n,kind:o,method:i});return}let l=Date.now(),u=globalThis.__codexpatchNotifyLastByConversation||(globalThis.__codexpatchNotifyLastByConversation=new Map),d=cpConv(e),f=s?"approval":v?"input_needed":q?"retry":a?"retry_response":c?"goal_attention":n,p=d+"|"+f+"|"+(cpRequestId(e)||cpTurnId(e)||i),h=u.get(p);if(h&&l-h<1e4){cpLog("notify-skip-duplicate",{key:p,status:n,kind:o});return}for(let[e,r]of u)try{l-r>12e4&&u.delete(e)}catch(_){}u.set(p,l);let g=cpMsg(e),m=cpTitle(f),y=cpBody(n,i,g,o,e?.goalStatus),x=s||v||q||c||!a&&n!=="completed";cpLog("notify-send",{conversationId:d,turnId:cpTurnId(e),status:n,kind:f,method:i,body:y});cpNotifyAdb(m,y,f);if(process.platform==="win32")try{let e=${JSON.stringify(WINDOWS_SYSTEM_NOTIFY_PS_V8)},r=cpMod(),o=r.path.join(r.os.tmpdir(),"codexpatch-notify.ps1");try{r.fs.writeFileSync(o,e,"utf8");cpLog("notify-script-written",{path:o,bytes:e.length})}catch(e){cpLog("notify-script-write-failed",{message:e?.message})}let n=r.cp.spawn("powershell.exe",["-NoProfile","-ExecutionPolicy","Bypass","-Sta","-File",o],{windowsHide:true,detached:false,stdio:["ignore","ignore","pipe"],env:{...process.env,CODEXPATCH_TITLE:m,CODEXPATCH_BODY:y,CODEXPATCH_ICON:x?"Warning":"Info",CODEXPATCH_EVENT:f,CODEXPATCH_AUMID:"vscodexkit.VSCode",CODEXPATCH_LOG_FILE:process.env.CODEXPATCH_LOG_FILE||r.path.join(r.os.tmpdir(),"codexpatch.log"),CODEXPATCH_SHORTCUT_TARGET:process.execPath,CODEXPATCH_SHORTCUT_ICON:process.execPath}});cpLog("notify-spawned",{pid:n.pid,event:f,file:o});n.stderr?.on?.("data",e=>cpLog("notify-stderr",{message:String(e).slice(0,500)}));n.on?.("exit",(e,r)=>cpLog("notify-exit",{code:e,signal:r,event:f}));n.on?.("error",e=>cpLog("notify-spawn-error",{message:e?.message}));return}catch(e){cpLog("notify-spawn-exception",{message:e?.message})}x?ut.window.showWarningMessage(y):ut.window.showInformationMessage(y)}catch(e){cpLog("notify-exception",{message:e?.message})}}
+function cpStart(e){try{let r=cpConv(typeof e==="string"?{conversationId:e}:e),n=Date.now();(globalThis.__codexpatchActiveConversations||(globalThis.__codexpatchActiveConversations=new Set)).add(r);if(typeof e==="string")try{cpOutputMap().delete(r)}catch(_){}else{let o=cpTurnId(e),i=cpActiveTurns(),s=cpGoalStates().get(r);for(let[e,r]of i)try{n-r.at>216e5&&i.delete(e)}catch(_){}s?.notified&&cpGoalStates().delete(r),o&&i.set(r,{turnId:o,at:n}),cpRestartRetryRound(e)}cpLog("conversation-start",{conversationId:r,turnId:typeof e==="string"?"":cpTurnId(e),source:e?.source,method:e?.method})}catch(_){}}
 function cpNotifyRetryResponse(e){try{let r=cpConv(e),n=cpRetryRounds().get(r),o=cpTurnId(e);if(!n||n.responseNotified)return;if(n.awaitingRestart){if(!o||!n.sourceTurnId||o===n.sourceTurnId)return;n.awaitingRestart=false,n.activeTurnId=o,n.messageRetry&&(n.messageTurnId=o)}if(n.activeTurnId&&o&&o!==n.activeTurnId)return;n.responseNotified=true,n.at=Date.now(),cpLog("auto-retry-assistant-response",{conversationId:r,turnId:o||n.activeTurnId||""}),cpNotify({source:"assistant-output",method:e?.method||"item/agentMessage/delta",conversationId:r,threadId:r,turnId:o||n.activeTurnId||"",status:"inProgress",kind:"retry_response"})}catch(r){cpLog("auto-retry-response-notify-exception",{message:r?.message})}}
-function cpObserveNotification(e){try{let r=cpText(e?.method),n=e?.params||{},o=cpText(n.threadId)||cpText(n.conversationId)||"global",i=cpText(n.turn?.id)||cpText(n.turnId)||cpText(n.item?.turnId)||"";if(r==="turn/started"){cpStart({source:"notification",method:r,conversationId:o,threadId:o,turnId:i,status:"inProgress",params:n});return}let s=r==="item/agentMessage/delta"||r==="codex/event/agent_message"||r==="codex/event/agent_message_delta"||r==="codex/event/agent_message_content_delta",a=cpText(n.item?.type).toLowerCase();if(r==="item/completed"&&/agentmessage|assistant/.test(a))s=true;if(!s)return;let c=cpText(n.delta)||cpAssistantText(n.item||n);if(!c.trim()&&!cpObjHasAssistantOutput(n.item))return;cpNotifyRetryResponse({source:"notification",method:r,conversationId:o,threadId:o,turnId:i,params:n})}catch(r){cpLog("notification-observe-exception",{message:r?.message})}}
-function cpHandle(e){try{let r=cpStatus(e),n=e?.method||"",i=cpTurnId(e);cpLog("observe",{source:e?.source,method:n,status:r,conversationId:cpConv(e),turnId:i,kind:e?.kind});if(r==="inProgress"){cpStart(e);return}if(cpFinal(r)&&!cpAuthoritativeEnd(e)){cpLog("notify-skip-nonauthoritative-final",{source:e?.source,method:n,status:r,conversationId:cpConv(e)});return}let o=cpRetryRound(e);if(cpFinal(r)&&o?.awaitingRestart&&i&&o.sourceTurnId&&i!==o.sourceTurnId)o.awaitingRestart=false,o.activeTurnId=i,o.messageRetry&&(o.messageTurnId=i),o.at=Date.now(),cpLog("auto-retry-terminal-restart-observed",{conversationId:cpConv(e),turnId:i,sourceTurnId:o.sourceTurnId,status:r});if(cpFinal(r)&&o&&(o.awaitingRestart||!i||!o.activeTurnId||i!==o.activeTurnId)){cpLog(r==="completed"?"notify-skip-stale-completed-during-retry":"auto-retry-skip-unproven-terminal",{conversationId:cpConv(e),method:n,status:r,turnId:i,sourceTurnId:o.sourceTurnId||"",activeTurnId:o.activeTurnId||"",awaitingRestart:o.awaitingRestart===true});return}let s=false;if(r==="failed"||n==="codex/event/stream_error"||n==="codex/event/error")s=cpRequestAutoRetry(e);if(s){cpLog("notify-skip-auto-retry",{conversationId:cpConv(e),status:r,method:n,msg:cpMsg(e)});return}if(cpFinal(r))cpClearRetryRound(e,r);if(cpFinal(r)||cpApproval(r)||e?.kind==="approval"||cpAwaitingUserMethod(n))cpNotify(e)}catch(n){cpLog("handle-exception",{message:n?.message})}}
+function cpObserveNotification(e){try{let r=cpText(e?.method),n=e?.params||{},o=cpText(n.threadId)||cpText(n.conversationId)||"global",i=cpText(n.turn?.id)||cpText(n.turnId)||cpText(n.item?.turnId)||"";if(r==="thread/goal/updated"||r==="thread/goal/cleared"){cpObserveGoalNotification(e);return}if(r==="turn/started"){cpStart({source:"notification",method:r,conversationId:o,threadId:o,turnId:i,status:"inProgress",params:n});return}let s=r==="item/agentMessage/delta"||r==="codex/event/agent_message"||r==="codex/event/agent_message_delta"||r==="codex/event/agent_message_content_delta",a=cpText(n.item?.type).toLowerCase();if(r==="item/completed"&&/agentmessage|assistant/.test(a))s=true;if(!s)return;let c=cpText(n.delta)||cpAssistantText(n.item||n);if(!c.trim()&&!cpObjHasAssistantOutput(n.item))return;cpNotifyRetryResponse({source:"notification",method:r,conversationId:o,threadId:o,turnId:i,params:n})}catch(r){cpLog("notification-observe-exception",{message:r?.message})}}
+function cpHandle(e){try{let r=cpStatus(e),n=e?.method||"",i=cpTurnId(e),a=cpConv(e);cpLog("observe",{source:e?.source,method:n,status:r,conversationId:a,turnId:i,kind:e?.kind});if(r==="inProgress"){cpStart(e);return}let c=e?.kind==="raw_turn";if(cpFinal(r)&&!c&&!cpAuthoritativeEnd(e)){cpLog("notify-skip-nonauthoritative-final",{source:e?.source,method:n,status:r,conversationId:a});return}let l=cpActiveTurns().get(a);if(cpFinal(r)&&l?.turnId&&i&&i!==l.turnId){cpLog("notify-skip-stale-active-turn",{conversationId:a,method:n,status:r,turnId:i,activeTurnId:l.turnId});return}let o=cpRetryRound(e);if(cpFinal(r)&&r!=="completed"&&o?.awaitingRestart&&i&&o.sourceTurnId&&i!==o.sourceTurnId)o.awaitingRestart=false,o.activeTurnId=i,o.messageRetry&&(o.messageTurnId=i),o.at=Date.now(),cpLog("auto-retry-terminal-restart-observed",{conversationId:a,turnId:i,sourceTurnId:o.sourceTurnId,status:r});if(cpFinal(r)&&o&&(o.awaitingRestart||!i||!o.activeTurnId||i!==o.activeTurnId)){cpLog(r==="completed"?"notify-skip-stale-completed-during-retry":"auto-retry-skip-unproven-terminal",{conversationId:a,method:n,status:r,turnId:i,sourceTurnId:o.sourceTurnId||"",activeTurnId:o.activeTurnId||"",awaitingRestart:o.awaitingRestart===true});return}let s=false;if(r==="failed"||n==="codex/event/stream_error"||n==="codex/event/error")s=cpRequestAutoRetry(e);if(s){cpLog("notify-skip-auto-retry",{conversationId:a,status:r,method:n,msg:cpMsg(e)});return}if(c){cpLog("notify-defer-raw-terminal",{conversationId:a,turnId:i,status:r});return}if(r==="completed"&&e?.kind==="authoritative_turn"&&e?.hasPendingContinuation!==false){l=cpActiveTurns().get(a),(!l||!i||l.turnId===i)&&cpActiveTurns().delete(a),cpClearRetryRound(e,"pending-continuation"),cpLog("notify-skip-pending-continuation",{conversationId:a,turnId:i,status:r,pending:e?.hasPendingContinuation});return}let u=cpGoalStates().get(a);if(r==="completed"&&u&&e?.kind!=="goal_complete"){l=cpActiveTurns().get(a),(!l||!i||l.turnId===i)&&cpActiveTurns().delete(a),cpClearRetryRound(e,r);if(u.status!=="complete"){cpLog("notify-skip-goal-not-complete",{conversationId:a,method:n,turnId:i,goalStatus:u.status});return}if(u.notified){cpLog("notify-skip-goal-complete-duplicate",{conversationId:a,method:n,turnId:i,updatedAt:u.updatedAt||""});return}u.notified=true,u.at=Date.now(),e={...e,kind:"goal_complete",requestId:u.updatedAt||cpRequestId(e)||i}}if(cpFinal(r))l=cpActiveTurns().get(a),(!l||!i||l.turnId===i)&&cpActiveTurns().delete(a),cpClearRetryRound(e,r);if(cpFinal(r)||cpApproval(r)||e?.kind==="approval"||e?.kind==="input_needed"||cpAwaitingUserRequest(e))cpNotify(e)}catch(n){cpLog("handle-exception",{message:n?.message})}}
 function cpPath(e){return Array.isArray(e)?e.map(cpText):typeof e==="string"?e.split(/[./]/):[]}
 function cpPathLooksTurn(e){let r=cpPath(e);return r.some(e=>e==="turn"||e==="turns"||e==="conversationTurns"||e==="visibleTurnEntries"||e==="turnHistory"||e==="latestTurn")}
 function cpFindStatus(e,r){if(r>7||e==null)return"";if(typeof e==="string")return cpFinal(e)||e==="inProgress"?e:"";if(typeof e!=="object")return"";if(typeof e.status==="string"&&(cpFinal(e.status)||e.status==="inProgress"))return e.status;if(Array.isArray(e)){for(let n=e.length-1;n>=0;n--){let o=cpFindStatus(e[n],r+1);if(o)return o}return""}for(let n of["turn","value","conversationState","latestTurn","entry","payload"]){let o=cpFindStatus(e[n],r+1);if(o)return o}return""}
 function cpObserveStreamFinalForRetry(e){try{let r=e?.change||e?.params?.change||{};if(r.type==="snapshot"){let n=cpFindStatus(r.conversationState,0);if(n==="failed")cpRequestAutoRetry({source:"thread-stream-state-final",method:"thread-stream-state-changed",conversationId:e?.conversationId,threadId:e?.conversationId,status:n,params:{change:r}});return}if(Array.isArray(r.patches)){for(let n of r.patches){if(!cpPathLooksTurn(n?.path))continue;let o=cpFindStatus(n?.value,0);if(!o&&cpPath(n?.path).at(-1)==="status")o=cpFindStatus(n?.value,0);if(o==="failed")cpRequestAutoRetry({source:"thread-stream-state-final",method:"thread-stream-state-changed",conversationId:e?.conversationId,threadId:e?.conversationId,status:o,error:n?.value?.error,params:{change:{type:r.type,patch:n}}})}return}let n=cpFindStatus(r,0);if(n==="failed")cpRequestAutoRetry({source:"thread-stream-state-final",method:"thread-stream-state-changed",conversationId:e?.conversationId,threadId:e?.conversationId,status:n,params:{change:r}})}catch(r){cpLog("stream-final-retry-exception",{message:r?.message})}}
 function cpStreamInfo(e){let r=e?.change||e?.params?.change||{},n={status:"",snapshot:r.type==="snapshot"};if(r.type==="snapshot"){let e=cpFindStatus(r.conversationState,0);if(e==="inProgress")n.status=e;else if(cpFinal(e))cpLog("stream-final-ignored",{status:e,snapshot:true});return n}if(Array.isArray(r.patches)){for(let e of r.patches){if(!cpPathLooksTurn(e?.path))continue;let r=cpFindStatus(e?.value,0);if(!r&&cpPath(e?.path).at(-1)==="status")r=cpFindStatus(e?.value,0);if(cpFinal(r)){cpLog("stream-final-ignored",{status:r,path:cpPath(e?.path).join(".")});continue}if(r==="inProgress"&&!n.status)n.status=r}return n}let o=cpFindStatus(r,0);if(o==="inProgress")n.status=o;else if(cpFinal(o))cpLog("stream-final-ignored",{status:o});return n}
-function cpObserveAppServerRequest(e){try{let r=cpText(e?.method),n=e?.params||{},o=cpText(n.conversationId)||cpText(n.threadId)||cpText(e?.conversationId)||cpText(e?.threadId)||"global",i=cpText(e?.id)||cpRequestId({params:n});cpLog("app-request-observe",{method:r,conversationId:o,requestId:i});if(!cpAwaitingUserMethod(r))return;let s=cpAwaitingInputMethod(r)?"input_needed":"approval_needed";cpHandle({source:"app-server-request",method:r,conversationId:o,threadId:o,requestId:i,status:s,kind:"approval",params:n})}catch(r){cpLog("app-request-observe-exception",{message:r?.message})}}
+function cpObserveAppServerRequest(e){try{let r=cpText(e?.method),n=e?.params||{},o=cpText(n.conversationId)||cpText(n.threadId)||cpText(e?.conversationId)||cpText(e?.threadId)||"global",i=cpText(e?.id)||cpRequestId({params:n});cpLog("app-request-observe",{method:r,conversationId:o,requestId:i});if(!cpAwaitingUserRequest(e))return;let s=cpAwaitingInputRequest(e)?"input_needed":"approval";cpHandle({source:"app-server-request",method:r,conversationId:o,threadId:o,requestId:i,status:s==="input_needed"?"input_needed":"approval_needed",kind:s,params:n})}catch(r){cpLog("app-request-observe-exception",{message:r?.message})}}
 globalThis.__codexpatchLog=cpLog;
 globalThis.__codexpatchNotifySystem=cpNotify;
 globalThis.__codexpatchNotifyConversationEnd=e=>cpHandle(e);
 globalThis.__codexpatchNotifyConversationStart=cpStart;
 globalThis.__codexpatchMarkUserInterrupt=cpMarkUserInterrupt;
 globalThis.__codexpatchObserveAppServerRequest=cpObserveAppServerRequest;
-globalThis.__codexpatchObserveThreadStreamState=e=>{try{cpRememberAssistantOutput(e);cpObserveStreamFinalForRetry(e);let r=cpStreamInfo(e);if(r.status==="inProgress")cpHandle({source:"thread-stream-state",method:"thread-stream-state-changed",conversationId:e?.conversationId,threadId:e?.conversationId,status:r.status,params:e,snapshot:r.snapshot})}catch(r){cpLog("stream-observe-exception",{message:r?.message})}};
+globalThis.__codexpatchObserveRichTurnCompleted=cpObserveRichTurnCompleted;
+globalThis.__codexpatchObserveThreadStreamState=e=>{try{cpRememberGoalFromStream(e);cpRememberAssistantOutput(e);cpObserveStreamFinalForRetry(e);let r=cpStreamInfo(e);if(r.status==="inProgress")cpHandle({source:"thread-stream-state",method:"thread-stream-state-changed",conversationId:e?.conversationId,threadId:e?.conversationId,status:r.status,params:e,snapshot:r.snapshot})}catch(r){cpLog("stream-observe-exception",{message:r?.message})}};
 cpLog("loaded",{version:${JSON.stringify(VERSION)}});
-return d.registerInternalNotificationHandler(Re=>{try{cpObserveNotification(Re)}catch(e){cpLog("notification-observe-exception",{message:e?.message})}if(Re.method==="turn/completed"){E.emit("turnComplete");try{let e=Re.params||{},r=e.turn||{};cpHandle({source:"turn-completed",method:Re.method,conversationId:e.threadId,threadId:e.threadId,turnId:r.id,status:r.status,error:r.error,params:e})}catch(e){cpLog("turn-completed-exception",{message:e?.message})}}});
+return d.registerInternalNotificationHandler(Re=>{try{cpObserveNotification(Re)}catch(e){cpLog("notification-observe-exception",{message:e?.message})}if(Re.method==="turn/completed"){E.emit("turnComplete");try{let e=Re.params||{},r=e.turn||{};cpHandle({source:"raw-turn-completed",method:Re.method,conversationId:e.threadId,threadId:e.threadId,turnId:r.id,status:r.status,error:r.error,kind:"raw_turn",params:e})}catch(e){cpLog("turn-completed-exception",{message:e?.message})}}});
 })());`;
 
 const MCP_LIFECYCLE_ANCHOR =
   'handleMcpNotification(e){let r=this.extractConversationId(e.params);if(r)switch(e.method){case"codex/event/task_started":this.updateConversationStatus(r,2);break;case"codex/event/task_complete":this.updateConversationStatus(r,1);break;case"codex/event/turn_aborted":case"codex/event/error":case"codex/event/stream_error":this.updateConversationStatus(r,0);break;default:break}}';
 
 const MCP_LIFECYCLE_PATCH =
-  'handleMcpNotification(e){let r=this.extractConversationId(e.params);switch(e.method){case"codex/event/exec_approval_request":case"codex/event/apply_patch_approval_request":globalThis.__codexpatchNotifyConversationEnd?.({source:"mcp",method:e.method,conversationId:r||"global",status:"approval_needed",kind:"approval",params:e.params});break;case"codex/event/request_user_input":case"codex/event/elicitation_request":case"codex/event/dynamic_tool_call_request":globalThis.__codexpatchNotifyConversationEnd?.({source:"mcp",method:e.method,conversationId:r||"global",status:"input_needed",kind:"approval",params:e.params});break;case"codex/event/task_started":if(r)this.updateConversationStatus(r,2),globalThis.__codexpatchNotifyConversationStart?.(r);break;case"codex/event/task_complete":if(r)this.updateConversationStatus(r,1),globalThis.__codexpatchNotifyConversationEnd?.({source:"mcp",method:e.method,conversationId:r,status:"completed",params:e.params});break;case"codex/event/turn_aborted":if(r)globalThis.__codexpatchNotifyConversationEnd?.({source:"mcp",method:e.method,conversationId:r,status:"interrupted",params:e.params}),this.updateConversationStatus(r,0);break;case"codex/event/error":case"codex/event/stream_error":if(r)globalThis.__codexpatchNotifyConversationEnd?.({source:"mcp",method:e.method,conversationId:r,status:"failed",params:e.params}),this.updateConversationStatus(r,0);break;default:break}}/* codexpatch:v1:mcp-lifecycle-conversation-end */';
+  'handleMcpNotification(e){let r=this.extractConversationId(e.params);switch(e.method){case"codex/event/exec_approval_request":case"codex/event/apply_patch_approval_request":globalThis.__codexpatchNotifyConversationEnd?.({source:"mcp",method:e.method,conversationId:r||"global",status:"approval_needed",kind:"approval",params:e.params});break;case"codex/event/request_user_input":case"codex/event/elicitation_request":case"codex/event/dynamic_tool_call_request":globalThis.__codexpatchNotifyConversationEnd?.({source:"mcp",method:e.method,conversationId:r||"global",status:"input_needed",kind:"input_needed",params:e.params});break;case"codex/event/task_started":if(r)this.updateConversationStatus(r,2),globalThis.__codexpatchNotifyConversationStart?.(r);break;case"codex/event/task_complete":if(r)this.updateConversationStatus(r,1);break;case"codex/event/turn_aborted":if(r)globalThis.__codexpatchNotifyConversationEnd?.({source:"mcp",method:e.method,conversationId:r,status:"interrupted",params:e.params}),this.updateConversationStatus(r,0);break;case"codex/event/error":case"codex/event/stream_error":if(r)globalThis.__codexpatchNotifyConversationEnd?.({source:"mcp",method:e.method,conversationId:r,status:"failed",params:e.params}),this.updateConversationStatus(r,0);break;default:break}}/* codexpatch:v1:mcp-lifecycle-conversation-end */';
 
 const APP_SERVER_REQUEST_PATTERN =
   /onRequest:([A-Za-z_$][\w$]*)=>\{this\.broadcastToAllViews\(\{type:"mcp-request",hostId:"local",request:\1\}\)\}/;
@@ -408,7 +424,10 @@ const HOST_MESSAGE_ANCHOR =
   'switch(r.type){case"ready":break;case"persisted-atom-sync-request":';
 
 const HOST_MESSAGE_PATCH =
-  'switch(r.type){case"codexpatch-settings-update":{/* codexpatch:v3:host-settings */try{globalThis.__codexpatchBroadcastToWebview=O=>{try{this.broadcastToAllViews(O)}catch(e){globalThis.__codexpatchLog?.("broadcast-exception",{message:e?.message})}};let n=r.settings||{};globalThis.__codexpatchSettings={notify:n.notify!==false,autoRetry:n.autoRetry!==false,retryDelayMs:Number(n.retryDelayMs)||1500};globalThis.__codexpatchLog?.("settings-update",globalThis.__codexpatchSettings)}catch(_){}break}case"codexpatch-user-interrupt":{try{globalThis.__codexpatchMarkUserInterrupt?.({source:"webview",method:r.method||"codexpatch-user-interrupt",conversationId:r.conversationId,threadId:r.threadId,turnId:r.turnId,requestId:r.requestId,params:r})}catch(e){globalThis.__codexpatchLog?.("webview-user-interrupt-exception",{message:e?.message})}break}case"codexpatch-notify":{try{globalThis.__codexpatchNotifySystem?.({source:"webview",method:"codexpatch/"+(r.kind||"notify"),conversationId:r.conversationId,status:r.status||"approval_needed",kind:r.kind||"info",message:r.message||r.body||"",body:r.body||r.message||""})}catch(e){globalThis.__codexpatchLog?.("webview-notify-exception",{message:e?.message})}break}case"codexpatch-diagnostic":{try{globalThis.__codexpatchLog?.("webview-"+(r.event||"event"),r)}catch(_){}break}case"ready":break;case"persisted-atom-sync-request":';
+  'switch(r.type){case"codexpatch-settings-update":{/* codexpatch:v3:host-settings */try{globalThis.__codexpatchBroadcastToWebview=O=>{try{this.broadcastToAllViews(O)}catch(e){globalThis.__codexpatchLog?.("broadcast-exception",{message:e?.message})}};let n=r.settings||{};globalThis.__codexpatchSettings={notify:n.notify!==false,autoRetry:n.autoRetry!==false,retryDelayMs:Number(n.retryDelayMs)||1500};globalThis.__codexpatchLog?.("settings-update",globalThis.__codexpatchSettings)}catch(_){}break}case"codexpatch-turn-completed":{try{globalThis.__codexpatchObserveRichTurnCompleted?.(r)}catch(e){globalThis.__codexpatchLog?.("rich-turn-bridge-exception",{message:e?.message})}break}case"codexpatch-user-interrupt":{try{globalThis.__codexpatchMarkUserInterrupt?.({source:"webview",method:r.method||"codexpatch-user-interrupt",conversationId:r.conversationId,threadId:r.threadId,turnId:r.turnId,requestId:r.requestId,params:r})}catch(e){globalThis.__codexpatchLog?.("webview-user-interrupt-exception",{message:e?.message})}break}case"codexpatch-notify":{try{globalThis.__codexpatchNotifySystem?.({source:"webview",method:"codexpatch/"+(r.kind||"notify"),conversationId:r.conversationId,status:r.status||"approval_needed",kind:r.kind||"info",message:r.message||r.body||"",body:r.body||r.message||""})}catch(e){globalThis.__codexpatchLog?.("webview-notify-exception",{message:e?.message})}break}case"codexpatch-diagnostic":{try{globalThis.__codexpatchLog?.("webview-"+(r.event||"event"),r)}catch(_){}break}case"ready":break;case"persisted-atom-sync-request":';
+
+const APP_SERVER_TURN_COMPLETED_PATTERN =
+  /this\.events\.emitTurnCompleted\(\{conversationId:(?<conversation>[A-Za-z_$][\w$]*),hostId:this\.hostId,status:(?<turn>[A-Za-z_$][\w$]*)\.status,turnId:\k<turn>\.id,lastAgentMessage:(?<lastMessage>[A-Za-z_$][\w$]*),heartbeatAssistantMessage:(?<heartbeat>[A-Za-z_$][\w$]*),automationNotificationDecision:(?<decision>[A-Za-z_$][\w$]*),hasPendingContinuation:(?<pending>[A-Za-z_$][\w$]*),restoredQueuedFollowUps:(?<followUps>[A-Za-z_$][\w$]*)\}\)/;
 
 const WEBVIEW_UI_SOURCE_LITE = `/* codexpatch:v8:webview-ui-diagnostic-lite */
 (() => {
@@ -644,8 +663,8 @@ function buildNotificationHandler(options, identifiers) {
   return handler
     .replace("e.push((()=>{", `${subscriptions}.push((()=>{`)
     .replace(
-      'return d.registerInternalNotificationHandler(Re=>{try{cpObserveNotification(Re)}catch(e){cpLog("notification-observe-exception",{message:e?.message})}if(Re.method==="turn/completed"){E.emit("turnComplete");try{let e=Re.params||{},r=e.turn||{};cpHandle({source:"turn-completed",method:Re.method,conversationId:e.threadId,threadId:e.threadId,turnId:r.id,status:r.status,error:r.error,params:e})}catch(e){cpLog("turn-completed-exception",{message:e?.message})}}});',
-      `return ${connection}.registerInternalNotificationHandler(${notification}=>{try{cpObserveNotification(${notification})}catch(e){cpLog("notification-observe-exception",{message:e?.message})}if(${notification}.method==="turn/completed"){${eventEmitter}.emit("turnComplete");try{let e=${notification}.params||{},r=e.turn||{};cpHandle({source:"turn-completed",method:${notification}.method,conversationId:e.threadId,threadId:e.threadId,turnId:r.id,status:r.status,error:r.error,params:e})}catch(e){cpLog("turn-completed-exception",{message:e?.message})}}});`
+      'return d.registerInternalNotificationHandler(Re=>{try{cpObserveNotification(Re)}catch(e){cpLog("notification-observe-exception",{message:e?.message})}if(Re.method==="turn/completed"){E.emit("turnComplete");try{let e=Re.params||{},r=e.turn||{};cpHandle({source:"raw-turn-completed",method:Re.method,conversationId:e.threadId,threadId:e.threadId,turnId:r.id,status:r.status,error:r.error,kind:"raw_turn",params:e})}catch(e){cpLog("turn-completed-exception",{message:e?.message})}}});',
+      `return ${connection}.registerInternalNotificationHandler(${notification}=>{try{cpObserveNotification(${notification})}catch(e){cpLog("notification-observe-exception",{message:e?.message})}if(${notification}.method==="turn/completed"){${eventEmitter}.emit("turnComplete");try{let e=${notification}.params||{},r=e.turn||{};cpHandle({source:"raw-turn-completed",method:${notification}.method,conversationId:e.threadId,threadId:e.threadId,turnId:r.id,status:r.status,error:r.error,kind:"raw_turn",params:e})}catch(e){cpLog("turn-completed-exception",{message:e?.message})}}});`
     );
 }
 
@@ -682,6 +701,32 @@ function patchNotificationRegistration(source, options) {
         eventEmitter: match[4]
       }),
     "notification registration anchor in clean baseline"
+  );
+}
+
+function patchAppServerManagerSignals(source) {
+  return replaceExactlyOnceByPattern(
+    source,
+    APP_SERVER_TURN_COMPLETED_PATTERN,
+    (match) => {
+      const {
+        conversation,
+        turn,
+        pending
+      } = match.groups;
+      const subagentCheck =
+        `(()=>{let e=this.getConversationOrThrow(${conversation}),t=e?.source,` +
+        `n=t&&typeof t===\`object\`&&\`subAgent\`in t?t.subAgent:null;` +
+        "return e.parentThreadId!=null||n!=null&&typeof n===`object`&&" +
+        "`thread_spawn`in n&&n.thread_spawn?.parent_thread_id!=null})()";
+      const bridge =
+        `this.dispatchMessageFromView(\`codexpatch-turn-completed\`,` +
+        `{conversationId:${conversation},hostId:this.hostId,status:${turn}.status,` +
+        `turnId:${turn}.id,error:${turn}.error,hasPendingContinuation:${pending},` +
+        `isSubagent:${subagentCheck}}),`;
+      return `${bridge}${match[0]}/* ${MARKERS.appServerSignals} */`;
+    },
+    "authoritative app-server turn completion anchor"
   );
 }
 
@@ -1127,6 +1172,10 @@ function findVsCodeExecutableFromPath() {
 function getTargetFiles(extensionDir) {
   const webviewAppMain = findWebviewAppMain(extensionDir);
   const webviewAppMainRelativePath = webviewAppMain ? path.relative(extensionDir, webviewAppMain) : null;
+  const webviewAppServerSignals = findWebviewAppServerSignals(extensionDir);
+  const webviewAppServerSignalsRelativePath = webviewAppServerSignals
+    ? path.relative(extensionDir, webviewAppServerSignals)
+    : null;
   return {
     extensionJs: path.join(extensionDir, EXTENSION_JS),
     webviewIndex: path.join(extensionDir, WEBVIEW_INDEX),
@@ -1134,6 +1183,11 @@ function getTargetFiles(extensionDir) {
     webviewAppMain,
     webviewAppMainRelativePath,
     webviewAppMainMetaKey: webviewAppMainRelativePath ? normalizeRelativePath(webviewAppMainRelativePath) : null,
+    webviewAppServerSignals,
+    webviewAppServerSignalsRelativePath,
+    webviewAppServerSignalsMetaKey: webviewAppServerSignalsRelativePath
+      ? normalizeRelativePath(webviewAppServerSignalsRelativePath)
+      : null,
     baselineDir: path.join(extensionDir, BASELINE_DIR),
     baselineOriginalDir: path.join(extensionDir, BASELINE_ORIGINAL_DIR),
     baselineMeta: path.join(extensionDir, BASELINE_META),
@@ -1142,6 +1196,9 @@ function getTargetFiles(extensionDir) {
     baselineWebviewUi: path.join(extensionDir, BASELINE_ORIGINAL_DIR, WEBVIEW_UI),
     baselineWebviewAppMain: webviewAppMainRelativePath
       ? path.join(extensionDir, BASELINE_ORIGINAL_DIR, webviewAppMainRelativePath)
+      : null,
+    baselineWebviewAppServerSignals: webviewAppServerSignalsRelativePath
+      ? path.join(extensionDir, BASELINE_ORIGINAL_DIR, webviewAppServerSignalsRelativePath)
       : null
   };
 }
@@ -1172,6 +1229,32 @@ function findWebviewAppMain(extensionDir) {
   }
   if (matches.length > 1) {
     throw new Error(`Found multiple candidate webview app bundles: ${matches.join(", ")}`);
+  }
+  return matches[0] || null;
+}
+
+function findWebviewAppServerSignals(extensionDir) {
+  const assetsDir = path.join(extensionDir, WEBVIEW_ASSETS_DIR);
+  if (!fs.existsSync(assetsDir)) return null;
+  const matches = [];
+  for (const entry of fs.readdirSync(assetsDir, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith(".js")) continue;
+    const filePath = path.join(assetsDir, entry.name);
+    let source = "";
+    try {
+      source = fs.readFileSync(filePath, "utf8");
+    } catch {
+      continue;
+    }
+    if (
+      source.includes(MARKERS.appServerSignals) ||
+      WEBVIEW_APP_SERVER_SIGNALS_NEEDLES.every((needle) => source.includes(needle))
+    ) {
+      matches.push(filePath);
+    }
+  }
+  if (matches.length > 1) {
+    throw new Error(`Found multiple candidate app-server signal bundles: ${matches.join(", ")}`);
   }
   return matches[0] || null;
 }
@@ -1282,6 +1365,12 @@ function getPatchStatus(files) {
   const uiSource = uiExists ? readText(files.webviewUi) : "";
   const appMainExists = Boolean(files.webviewAppMain && fs.existsSync(files.webviewAppMain));
   const appMainSource = appMainExists ? readText(files.webviewAppMain) : "";
+  const appServerSignalsExists = Boolean(
+    files.webviewAppServerSignals && fs.existsSync(files.webviewAppServerSignals)
+  );
+  const appServerSignalsSource = appServerSignalsExists
+    ? readText(files.webviewAppServerSignals)
+    : "";
   const webviewRetrySymbolResolution = inspectWebviewRetryPlan(appMainSource);
   const baselineMeta = readJsonIfExists(files.baselineMeta);
 
@@ -1291,6 +1380,8 @@ function getPatchStatus(files) {
     uiSource,
     appMainSource,
     webviewAppMainExists: appMainExists,
+    appServerSignalsSource,
+    webviewAppServerSignalsExists: appServerSignalsExists,
     baselineAvailable:
       baselineMeta != null &&
       fs.existsSync(files.baselineExtensionJs) &&
@@ -1302,6 +1393,11 @@ function getPatchStatus(files) {
     mcpLifecycleAnchorCount: countOccurrences(extensionSource, MCP_LIFECYCLE_ANCHOR),
     appServerRequestPatched: extensionSource.includes(MARKERS.appServerRequest),
     appServerRequestAnchorCount: countPatternMatches(extensionSource, APP_SERVER_REQUEST_PATTERN),
+    appServerSignalsPatched: appServerSignalsSource.includes(MARKERS.appServerSignals),
+    appServerSignalsAnchorCount: countPatternMatches(
+      appServerSignalsSource,
+      APP_SERVER_TURN_COMPLETED_PATTERN
+    ),
     threadStreamStatePatched: extensionSource.includes(MARKERS.threadStreamState),
     threadStreamStateAnchorCount:
       countPatternMatches(extensionSource, THREAD_STREAM_STATE_PATTERN) +
@@ -1370,12 +1466,48 @@ function loadBaseline(manifest, files) {
     return null;
   }
 
-  return { extensionSource, indexSource, uiSource, appMainSource, webviewUiExists, webviewAppMainExists, meta };
+  const webviewAppServerSignalsExists = meta.webviewAppServerSignalsExists === true;
+  if (
+    webviewAppServerSignalsExists &&
+    normalizeRelativePath(meta.webviewAppServerSignalsRelativePath || "") !==
+      files.webviewAppServerSignalsMetaKey
+  ) {
+    return null;
+  }
+  const appServerSignalsSource =
+    webviewAppServerSignalsExists &&
+    files.baselineWebviewAppServerSignals &&
+    fs.existsSync(files.baselineWebviewAppServerSignals)
+      ? readText(files.baselineWebviewAppServerSignals)
+      : "";
+  if (webviewAppServerSignalsExists && !isCleanSource(appServerSignalsSource)) return null;
+  if (
+    webviewAppServerSignalsExists &&
+    files.webviewAppServerSignalsMetaKey &&
+    !baselineHashMatches(meta, files.webviewAppServerSignalsMetaKey, appServerSignalsSource)
+  ) {
+    return null;
+  }
+
+  return {
+    extensionSource,
+    indexSource,
+    uiSource,
+    appMainSource,
+    appServerSignalsSource,
+    webviewUiExists,
+    webviewAppMainExists,
+    webviewAppServerSignalsExists,
+    meta
+  };
 }
 
 function ensureBaseline(extensionDir, manifest, files, status) {
   const loaded = loadBaseline(manifest, files);
-  if (loaded) return ensureWebviewAppMainBaseline(loaded, files, status);
+  if (loaded) {
+    const withAppMain = ensureWebviewAppMainBaseline(loaded, files, status);
+    return ensureWebviewAppServerSignalsBaseline(withAppMain, files, status);
+  }
 
   const existingMeta = readJsonIfExists(files.baselineMeta);
   const hasBaselineState = fs.existsSync(files.baselineDir);
@@ -1388,7 +1520,8 @@ function ensureBaseline(extensionDir, manifest, files, status) {
     isCleanSource(status.extensionSource) &&
     isCleanSource(status.indexSource) &&
     (!status.webviewUiExists || isCleanSource(status.uiSource)) &&
-    (!status.webviewAppMainExists || isCleanSource(status.appMainSource));
+    (!status.webviewAppMainExists || isCleanSource(status.appMainSource)) &&
+    (!status.webviewAppServerSignalsExists || isCleanSource(status.appServerSignalsSource));
 
   if ((staleBaseline || hasBaselineState) && !currentLooksClean) {
     throw new Error(
@@ -1408,8 +1541,15 @@ function ensureBaseline(extensionDir, manifest, files, status) {
   const indexSource = getCleanSourceForBaseline(files.webviewIndex, status.indexSource, "webview/index.html");
   const uiClean = getOptionalCleanSourceForBaseline(files.webviewUi, status.uiSource);
   const appMainClean = getOptionalCleanSourceForBaseline(files.webviewAppMain, status.appMainSource);
+  const appServerSignalsClean = getOptionalCleanSourceForBaseline(
+    files.webviewAppServerSignals,
+    status.appServerSignalsSource
+  );
   if (!appMainClean.exists) {
     throw new Error("Cannot locate a clean webview app-main bundle for user-interrupt patching.");
+  }
+  if (!appServerSignalsClean.exists) {
+    throw new Error("Cannot locate a clean app-server signal bundle for lifecycle patching.");
   }
 
   writeTextEnsuringDir(files.baselineExtensionJs, extensionSource);
@@ -1420,6 +1560,7 @@ function ensureBaseline(extensionDir, manifest, files, status) {
     fs.unlinkSync(files.baselineWebviewUi);
   }
   writeTextEnsuringDir(files.baselineWebviewAppMain, appMainClean.source);
+  writeTextEnsuringDir(files.baselineWebviewAppServerSignals, appServerSignalsClean.source);
 
   const meta = {
     codexpatch: VERSION,
@@ -1432,11 +1573,14 @@ function ensureBaseline(extensionDir, manifest, files, status) {
       [EXTENSION_JS]: sha256(extensionSource),
       [WEBVIEW_INDEX]: sha256(indexSource),
       [WEBVIEW_UI]: uiClean.exists ? sha256(uiClean.source) : null,
-      [files.webviewAppMainMetaKey]: sha256(appMainClean.source)
+      [files.webviewAppMainMetaKey]: sha256(appMainClean.source),
+      [files.webviewAppServerSignalsMetaKey]: sha256(appServerSignalsClean.source)
     },
     webviewUiExists: uiClean.exists,
     webviewAppMainExists: appMainClean.exists,
-    webviewAppMainRelativePath: files.webviewAppMainMetaKey
+    webviewAppMainRelativePath: files.webviewAppMainMetaKey,
+    webviewAppServerSignalsExists: appServerSignalsClean.exists,
+    webviewAppServerSignalsRelativePath: files.webviewAppServerSignalsMetaKey
   };
   writeTextEnsuringDir(files.baselineMeta, `${JSON.stringify(meta, null, 2)}\n`);
   console.log(`Baseline: ${files.baselineMeta}`);
@@ -1445,8 +1589,10 @@ function ensureBaseline(extensionDir, manifest, files, status) {
     indexSource,
     uiSource: uiClean.source,
     appMainSource: appMainClean.source,
+    appServerSignalsSource: appServerSignalsClean.source,
     webviewUiExists: uiClean.exists,
     webviewAppMainExists: appMainClean.exists,
+    webviewAppServerSignalsExists: appServerSignalsClean.exists,
     meta
   };
 }
@@ -1477,6 +1623,35 @@ function ensureWebviewAppMainBaseline(loaded, files, status) {
   };
 }
 
+function ensureWebviewAppServerSignalsBaseline(loaded, files, status) {
+  if (loaded.webviewAppServerSignalsExists) return loaded;
+  const clean = getOptionalCleanSourceForBaseline(
+    files.webviewAppServerSignals,
+    status.appServerSignalsSource
+  );
+  if (!clean.exists) {
+    throw new Error("Cannot locate a clean app-server signal bundle for lifecycle patching.");
+  }
+  writeTextEnsuringDir(files.baselineWebviewAppServerSignals, clean.source);
+  const meta = {
+    ...loaded.meta,
+    codexpatch: VERSION,
+    files: {
+      ...(loaded.meta.files || {}),
+      [files.webviewAppServerSignalsMetaKey]: sha256(clean.source)
+    },
+    webviewAppServerSignalsExists: true,
+    webviewAppServerSignalsRelativePath: files.webviewAppServerSignalsMetaKey
+  };
+  writeTextEnsuringDir(files.baselineMeta, `${JSON.stringify(meta, null, 2)}\n`);
+  return {
+    ...loaded,
+    appServerSignalsSource: clean.source,
+    webviewAppServerSignalsExists: true,
+    meta
+  };
+}
+
 function baselineHashMatches(meta, fileKey, source) {
   const expected = meta.files?.[fileKey];
   return typeof expected !== "string" || expected === sha256(source);
@@ -1502,6 +1677,7 @@ function isPatchStatusOk(status) {
     status.notificationPatched &&
     status.mcpLifecyclePatched &&
     status.appServerRequestPatched &&
+    status.appServerSignalsPatched &&
     status.threadStreamStatePatched &&
     status.userInterruptPatched &&
     status.hostSettingsPatched &&
@@ -1534,10 +1710,11 @@ function printStatus(extensionDir, manifest, files) {
   console.log(`Path:       ${extensionDir}`);
   console.log(`Baseline:  ${baseline ? `yes (${baseline.meta.extensionVersion})` : status.baselineAvailable ? `no (stored ${status.baselineVersion})` : "no"}`);
   console.log(`Host patch: ${status.notificationPatched && status.hostSettingsPatched && status.appServerRequestPatched && status.threadStreamStatePatched && status.userInterruptPatched ? "yes" : "no"}`);
-  console.log(`Webview:    ${status.webviewIndexPatched && status.webviewUiPatched && status.webviewUserInterruptPatched && status.webviewAutoRetryPatched && status.webviewAutoRetryCommandPatched ? "yes" : "no"}`);
+  console.log(`Webview:    ${status.webviewIndexPatched && status.webviewUiPatched && status.webviewUserInterruptPatched && status.webviewAutoRetryPatched && status.webviewAutoRetryCommandPatched && status.appServerSignalsPatched ? "yes" : "no"}`);
   console.log(`Notify:    ${status.notificationPatched ? "yes" : "no"}`);
   console.log(`Lifecycle:  ${status.mcpLifecyclePatched ? "yes" : "no"}`);
   console.log(`App req:    ${status.appServerRequestPatched ? "yes" : "no"}`);
+  console.log(`App events: ${status.appServerSignalsPatched ? "yes" : "no"}`);
   console.log(`Stream:     ${status.threadStreamStatePatched ? "yes" : "no"}`);
   console.log(`Interrupt:  ${status.userInterruptPatched ? "yes" : "no"}`);
   console.log(`Settings:   ${status.hostSettingsPatched ? "yes" : "no"}`);
@@ -1555,7 +1732,7 @@ function printStatus(extensionDir, manifest, files) {
   if (status.webviewRetrySymbolResolution.error) {
     console.log(`WV sym err: ${status.webviewRetrySymbolResolution.error}`);
   }
-  console.log(`Anchors:    notify=${status.notificationAnchorCount} lifecycle=${status.mcpLifecycleAnchorCount} appReq=${status.appServerRequestAnchorCount} stream=${status.threadStreamStateAnchorCount} interrupt=${status.userInterruptAnchorCount} host=${status.hostSettingsAnchorCount} webview=${status.webviewIndexAnchorCount} wvInt=${status.webviewInterruptAnchorCount}/${status.webviewFollowerInterruptAnchorCount} wvRetry=${status.webviewAutoRetryAnchorCount} wvRetryCmd=${status.webviewAutoRetryCommandAnchorCount}`);
+  console.log(`Anchors:    notify=${status.notificationAnchorCount} lifecycle=${status.mcpLifecycleAnchorCount} appReq=${status.appServerRequestAnchorCount} appEvents=${status.appServerSignalsAnchorCount} stream=${status.threadStreamStateAnchorCount} interrupt=${status.userInterruptAnchorCount} host=${status.hostSettingsAnchorCount} webview=${status.webviewIndexAnchorCount} wvInt=${status.webviewInterruptAnchorCount}/${status.webviewFollowerInterruptAnchorCount} wvRetry=${status.webviewAutoRetryAnchorCount} wvRetryCmd=${status.webviewAutoRetryCommandAnchorCount}`);
 
   const ok = isPatchStatusOk(status);
   console.log(`Status:     ${ok ? "ok" : "unsupported bundle shape; apply will fail closed"}`);
@@ -1619,12 +1796,16 @@ function applyPatch(extensionDir, manifest, files, options) {
     retryPlan
   );
   const appMainSource = patchAppMainAutoRetry(appMainWithAutoRetryCommand);
+  const appServerSignalsSource = patchAppServerManagerSignals(
+    baseline.appServerSignalsSource
+  );
 
   if (
     status.extensionSource === extensionSource &&
     status.indexSource === indexSource &&
     status.uiSource === webviewUiSource &&
-    status.appMainSource === appMainSource
+    status.appMainSource === appMainSource &&
+    status.appServerSignalsSource === appServerSignalsSource
   ) {
     console.log(`Already patched from clean baseline: ${extensionDir}`);
     return;
@@ -1634,6 +1815,7 @@ function applyPatch(extensionDir, manifest, files, options) {
   writeTextEnsuringDir(files.webviewIndex, indexSource);
   writeTextEnsuringDir(files.webviewUi, webviewUiSource);
   writeTextEnsuringDir(files.webviewAppMain, appMainSource);
+  writeTextEnsuringDir(files.webviewAppServerSignals, appServerSignalsSource);
 
   if (!options.skipSyntaxCheck) {
     try {
@@ -1646,6 +1828,10 @@ function applyPatch(extensionDir, manifest, files, options) {
         windowsHide: true
       });
       childProcess.execFileSync(process.execPath, ["--check", files.webviewAppMain], {
+        stdio: "pipe",
+        windowsHide: true
+      });
+      childProcess.execFileSync(process.execPath, ["--check", files.webviewAppServerSignals], {
         stdio: "pipe",
         windowsHide: true
       });
@@ -1737,6 +1923,13 @@ function restoreFilesFromBaseline(baseline, files) {
     writeTextEnsuringDir(files.webviewAppMain, baseline.appMainSource);
     restored.push({ filePath: files.webviewAppMain, backup: files.baselineWebviewAppMain });
   }
+  if (baseline.webviewAppServerSignalsExists) {
+    writeTextEnsuringDir(files.webviewAppServerSignals, baseline.appServerSignalsSource);
+    restored.push({
+      filePath: files.webviewAppServerSignals,
+      backup: files.baselineWebviewAppServerSignals
+    });
+  }
   return restored;
 }
 
@@ -1747,7 +1940,8 @@ function isCurrentInstallClean(files) {
       isCleanSource(status.extensionSource) &&
       isCleanSource(status.indexSource) &&
       (!status.webviewUiExists || isCleanSource(status.uiSource)) &&
-      (!status.webviewAppMainExists || isCleanSource(status.appMainSource))
+      (!status.webviewAppMainExists || isCleanSource(status.appMainSource)) &&
+      (!status.webviewAppServerSignalsExists || isCleanSource(status.appServerSignalsSource))
     );
   } catch {
     return false;
@@ -1820,11 +2014,13 @@ if (require.main === module) {
 module.exports = {
   buildAdbNotificationArgs,
   findWebviewAppMain,
+  findWebviewAppServerSignals,
   parseAdbDeviceSerials,
   patchAppMainAutoRetry,
   patchAppMainFollowerInterrupt,
   patchAppMainInterrupt,
   patchAppMainRetryCommands,
+  patchAppServerManagerSignals,
   patchAppServerRequest,
   patchHostUserInterrupt,
   patchNotificationRegistration,
